@@ -6,7 +6,7 @@ import { getUserProfile, UserProfile } from '@/lib/auth';
 import { onAuthStateChanged } from 'firebase/auth';
 import {
     collection, query, where, getDocs, doc,
-    addDoc, updateDoc, serverTimestamp, getDoc,
+    addDoc, updateDoc, serverTimestamp,
     orderBy, onSnapshot
 } from 'firebase/firestore';
 import StudentLayout from '@/components/StudentLayout';
@@ -34,27 +34,19 @@ interface Quiz {
     title: string;
     questions: Question[];
     createdBy: string;
-    createdByName?: string;
     classId: string;
     status: string;
-    topicName?: string;
-    createdAt?: any;
+    anonymousLabel?: string;
 }
 
-type Quality = 'good' | 'needs_improvement' | 'irrelevant' | '';
+// ── Per-question verdict ───────────────────────────────────────────────────
+type Verdict = 'approved' | 'rejected' | '';
 
 interface QuestionFeedback {
     questionId: number;
-    quality: Quality;
+    verdict: Verdict;
     comment: string;
 }
-
-// ── Quality options ────────────────────────────────────────────────────────
-const QUALITY_OPTIONS: { value: Quality; label: string; color: string; bg: string }[] = [
-    { value: 'good', label: '✅ Good', color: 'text-green-700', bg: 'bg-green-50 border-green-400' },
-    { value: 'needs_improvement', label: '⚠️ Needs Work', color: 'text-yellow-700', bg: 'bg-yellow-50 border-yellow-400' },
-    { value: 'irrelevant', label: '❌ Irrelevant', color: 'text-red-700', bg: 'bg-red-50 border-red-400' },
-];
 
 // ── Main Page ──────────────────────────────────────────────────────────────
 export default function ReviewPeersPage() {
@@ -64,23 +56,17 @@ export default function ReviewPeersPage() {
     const [selectedQuiz, setSelectedQuiz] = useState<Quiz | null>(null);
     const [alreadyReviewed, setAlreadyReviewed] = useState<Set<string>>(new Set());
 
-    // Topic filter state
+    // Topic filter
     const [topics, setTopics] = useState<{ id: string; name: string }[]>([]);
     const [selectedTopicId, setSelectedTopicId] = useState<string>('');
-    const [searched, setSearched] = useState(false);
 
-    // Review form state
-    const [overallFeedback, setOverallFeedback] = useState('');
-    const [rating, setRating] = useState(0);
-    const [hoverRating, setHoverRating] = useState(0);
+    // Review form
     const [questionFeedback, setQuestionFeedback] = useState<QuestionFeedback[]>([]);
-    const [suggestToTeacher, setSuggestToTeacher] = useState(false);
-    const [suggestReason, setSuggestReason] = useState('');
     const [submitting, setSubmitting] = useState(false);
     const [submitted, setSubmitted] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    // Load topics from Firestore
+    // Load topics
     useEffect(() => {
         const q = query(collection(db, 'topics'), orderBy('createdAt', 'asc'));
         const unsub = onSnapshot(q, (snap) => {
@@ -113,18 +99,12 @@ export default function ReviewPeersPage() {
                 .map(d => ({ id: d.id, ...d.data() } as Quiz))
                 .filter(qz => qz.createdBy !== profile.uid);
 
-            // Enrich with creator name
-            const enriched = await Promise.all(all.map(async (qz) => {
-                try {
-                    const userSnap = await getDoc(doc(db, 'users', qz.createdBy));
-                    const userData = userSnap.data() as any;
-                    return { ...qz, createdByName: userData?.name || 'A classmate' };
-                } catch {
-                    return { ...qz, createdByName: 'A classmate' };
-                }
-            }));
+            // Shuffle + label anonymously
+            const shuffled = all
+                .sort(() => Math.random() - 0.5)
+                .map((qz, idx) => ({ ...qz, anonymousLabel: `Quiz #${idx + 1}` }));
 
-            // Check which ones this user already reviewed
+            // Already reviewed
             const reviewQ = query(
                 collection(db, 'reviews'),
                 where('reviewerId', '==', profile.uid),
@@ -133,7 +113,7 @@ export default function ReviewPeersPage() {
             const reviewed = new Set(reviewSnap.docs.map(d => (d.data() as any).quizId as string));
 
             setAlreadyReviewed(reviewed);
-            setQuizzes(enriched);
+            setQuizzes(shuffled);
         } catch (e) {
             console.error(e);
             setError('Failed to load quizzes. Please refresh.');
@@ -142,47 +122,40 @@ export default function ReviewPeersPage() {
         }
     };
 
-    // Open a quiz for review
     const openReview = (quiz: Quiz) => {
         setSelectedQuiz(quiz);
-        setOverallFeedback('');
-        setRating(0);
-        setHoverRating(0);
-        setSuggestToTeacher(false);
-        setSuggestReason('');
         setSubmitted(false);
         setError(null);
         setQuestionFeedback(
-            quiz.questions.map(q => ({ questionId: q.id, quality: '', comment: '' }))
+            quiz.questions.map(q => ({ questionId: q.id, verdict: '', comment: '' }))
         );
         window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
-    const closeReview = () => {
-        setSelectedQuiz(null);
-        setSubmitted(false);
-    };
+    const closeReview = () => { setSelectedQuiz(null); setSubmitted(false); };
 
-    const setQFeedback = (questionId: number, field: 'quality' | 'comment', value: string) => {
+    const setQFeedback = (questionId: number, field: 'verdict' | 'comment', value: string) => {
         setQuestionFeedback(prev =>
             prev.map(qf => qf.questionId === questionId ? { ...qf, [field]: value } : qf)
         );
     };
 
-    // Submit review
+    // Submit
     const handleSubmit = async () => {
         if (!selectedQuiz || !userProfile) return;
-        if (!overallFeedback.trim()) { setError('Please write overall feedback.'); return; }
-        if (rating === 0) { setError('Please give a star rating.'); return; }
-        const unanswered = questionFeedback.filter(qf => !qf.quality);
-        if (unanswered.length > 0) {
-            setError(`Please rate all ${unanswered.length} question(s) — Good / Needs Work / Irrelevant.`);
+
+        const unvoted = questionFeedback.filter(qf => !qf.verdict);
+        if (unvoted.length > 0) {
+            setError(`Please approve or reject all ${unvoted.length} question(s) before submitting.`);
             return;
         }
 
         setSubmitting(true);
         setError(null);
         try {
+            const allApproved = questionFeedback.every(qf => qf.verdict === 'approved');
+            const allRejected = questionFeedback.every(qf => qf.verdict === 'rejected');
+
             await addDoc(collection(db, 'reviews'), {
                 quizId: selectedQuiz.id,
                 quizTitle: selectedQuiz.title,
@@ -190,19 +163,14 @@ export default function ReviewPeersPage() {
                 reviewerId: userProfile.uid,
                 reviewerName: userProfile.name || 'Student',
                 classId: userProfile.classId,
-                overallFeedback,
-                rating,
                 questionFeedback,
-                suggestToTeacher,
-                suggestReason: suggestToTeacher ? suggestReason : '',
+                overallVerdict: allApproved ? 'approved' : allRejected ? 'rejected' : 'mixed',
                 createdAt: serverTimestamp(),
             });
 
-            const newStatus = suggestToTeacher ? 'peer_approved' : 'peer_reviewed';
             await updateDoc(doc(db, 'quizzes', selectedQuiz.id), {
-                status: newStatus,
+                status: 'peer_reviewed',
                 lastReviewedAt: serverTimestamp(),
-                ...(suggestToTeacher && { suggestedByPeer: true }),
             });
 
             setAlreadyReviewed(prev => new Set([...prev, selectedQuiz.id]));
@@ -215,7 +183,7 @@ export default function ReviewPeersPage() {
         }
     };
 
-    // Filtered quiz lists
+    // Filter
     const filteredQuizzes = selectedTopicId
         ? quizzes.filter(qz =>
             qz.questions.some(q =>
@@ -228,7 +196,7 @@ export default function ReviewPeersPage() {
     const pendingQuizzes = filteredQuizzes.filter(qz => !alreadyReviewed.has(qz.id));
     const reviewedQuizzes = filteredQuizzes.filter(qz => alreadyReviewed.has(qz.id));
 
-    // ── Render: Success screen ─────────────────────────────────────────────
+    // ── Success screen ─────────────────────────────────────────────────────
     if (selectedQuiz && submitted) {
         return (
             <StudentLayout title="Peer Review">
@@ -236,48 +204,57 @@ export default function ReviewPeersPage() {
                     <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-10">
                         <div className="text-6xl mb-4">🎉</div>
                         <h2 className="text-2xl font-bold text-slate-800 mb-2">Review Submitted!</h2>
-                        <p className="text-slate-500 mb-2">
+                        <p className="text-slate-500 mb-6">
                             Your feedback on <span className="font-semibold text-purple-600">"{selectedQuiz.title}"</span> has been saved.
                         </p>
-                        {suggestToTeacher && (
-                            <p className="text-sm text-green-600 font-semibold bg-green-50 px-4 py-2 rounded-lg inline-block mb-4">
-                                ✅ You suggested this quiz to the teacher for classroom use!
-                            </p>
-                        )}
-                        <div className="flex gap-3 justify-center mt-6">
-                            <button
-                                onClick={closeReview}
-                                className="bg-purple-600 hover:bg-purple-700 text-white font-semibold px-6 py-2.5 rounded-xl transition-all"
-                            >
-                                ← Back to Quizzes
-                            </button>
-                        </div>
+                        <button
+                            onClick={closeReview}
+                            className="bg-purple-600 hover:bg-purple-700 text-white font-semibold px-6 py-2.5 rounded-xl transition-all"
+                        >
+                            ← Back to Quizzes
+                        </button>
                     </div>
                 </div>
             </StudentLayout>
         );
     }
 
-    // ── Render: Review Form ────────────────────────────────────────────────
+    // ── Review form ────────────────────────────────────────────────────────
     if (selectedQuiz) {
+        const approvedCount = questionFeedback.filter(qf => qf.verdict === 'approved').length;
+        const rejectedCount = questionFeedback.filter(qf => qf.verdict === 'rejected').length;
+        const totalCount = questionFeedback.length;
+
         return (
             <StudentLayout title="Peer Review">
                 <div className="max-w-3xl mx-auto p-4 sm:p-6">
 
                     {/* Header */}
-                    <div className="flex items-center gap-3 mb-6">
+                    <div className="flex items-center gap-3 mb-4">
                         <button
                             onClick={closeReview}
                             className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 transition-colors"
                         >
                             ← Back
                         </button>
-                        <div>
-                            <h1 className="text-xl font-bold text-slate-800">Reviewing: {selectedQuiz.title}</h1>
-                            <p className="text-sm text-slate-400">
-                                By {selectedQuiz.createdByName} · {selectedQuiz.questions.length} question{selectedQuiz.questions.length !== 1 ? 's' : ''}
+                        <div className="flex-1">
+                            <h1 className="text-xl font-bold text-slate-800">{selectedQuiz.title}</h1>
+                            <p className="text-sm text-slate-400 flex items-center gap-2 mt-0.5">
+                                <span className="bg-slate-100 text-slate-500 text-xs font-semibold px-2 py-0.5 rounded-full">
+                                    🎭 Anonymous submission
+                                </span>
+                                · {totalCount} question{totalCount !== 1 ? 's' : ''}
                             </p>
                         </div>
+                        {/* Progress pill */}
+                        <div className="text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full shrink-0">
+                            {approvedCount + rejectedCount}/{totalCount} rated
+                        </div>
+                    </div>
+
+                    {/* Anonymous notice */}
+                    <div className="mb-5 px-4 py-3 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl text-sm flex items-center gap-2">
+                        🔒 <span>The author is hidden. Review based on content quality only.</span>
                     </div>
 
                     {error && (
@@ -287,11 +264,21 @@ export default function ReviewPeersPage() {
                     )}
 
                     {/* ── Questions ── */}
-                    <div className="space-y-5 mb-6">
+                    <div className="space-y-4 mb-6">
                         {selectedQuiz.questions.map((q, idx) => {
                             const qf = questionFeedback.find(f => f.questionId === q.id);
+                            const isApproved = qf?.verdict === 'approved';
+                            const isRejected = qf?.verdict === 'rejected';
+
                             return (
-                                <div key={q.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                                <div
+                                    key={q.id}
+                                    className={`bg-white rounded-2xl border-2 shadow-sm overflow-hidden transition-all ${isApproved ? 'border-green-400' :
+                                            isRejected ? 'border-red-400' :
+                                                'border-slate-100'
+                                        }`}
+                                >
+                                    {/* Question header */}
                                     <div className="bg-gradient-to-r from-purple-600 to-violet-600 px-5 py-3 flex items-center justify-between">
                                         <span className="text-white text-xs font-semibold uppercase tracking-wide">
                                             Question {idx + 1} · {q.type === 'true_or_false' ? 'True / False' : 'Multiple Choice'}
@@ -304,6 +291,7 @@ export default function ReviewPeersPage() {
                                     </div>
 
                                     <div className="p-5">
+                                        {/* Question text */}
                                         <p className="text-slate-800 font-semibold text-base mb-4">
                                             {q.text || <span className="text-slate-400 italic">No question text</span>}
                                         </p>
@@ -326,29 +314,39 @@ export default function ReviewPeersPage() {
                                             })}
                                         </div>
 
-                                        {/* Per-question rating */}
+                                        {/* ── Approve / Reject + comment ── */}
                                         <div className="border-t border-slate-100 pt-4">
-                                            <p className="text-xs font-semibold text-slate-600 mb-2">Rate this question:</p>
-                                            <div className="flex flex-wrap gap-2 mb-3">
-                                                {QUALITY_OPTIONS.map(opt => (
-                                                    <button
-                                                        key={opt.value}
-                                                        onClick={() => setQFeedback(q.id, 'quality', opt.value)}
-                                                        className={`px-3 py-1.5 rounded-lg border-2 text-xs font-semibold transition-all ${qf?.quality === opt.value
-                                                                ? `${opt.bg} ${opt.color} scale-105`
-                                                                : 'border-slate-200 text-slate-500 hover:border-slate-300'
-                                                            }`}
-                                                    >
-                                                        {opt.label}
-                                                    </button>
-                                                ))}
+                                            <p className="text-xs font-semibold text-slate-600 mb-3">Your verdict:</p>
+                                            <div className="flex gap-3 mb-3">
+                                                {/* Approve */}
+                                                <button
+                                                    onClick={() => setQFeedback(q.id, 'verdict', 'approved')}
+                                                    className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 font-semibold text-sm transition-all ${isApproved
+                                                            ? 'bg-green-500 border-green-500 text-white scale-[1.02] shadow-md'
+                                                            : 'border-slate-200 text-slate-500 hover:border-green-400 hover:text-green-600 hover:bg-green-50'
+                                                        }`}
+                                                >
+                                                    ✅ Approve
+                                                </button>
+                                                {/* Reject */}
+                                                <button
+                                                    onClick={() => setQFeedback(q.id, 'verdict', 'rejected')}
+                                                    className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 font-semibold text-sm transition-all ${isRejected
+                                                            ? 'bg-red-500 border-red-500 text-white scale-[1.02] shadow-md'
+                                                            : 'border-slate-200 text-slate-500 hover:border-red-400 hover:text-red-600 hover:bg-red-50'
+                                                        }`}
+                                                >
+                                                    ❌ Reject
+                                                </button>
                                             </div>
+
+                                            {/* Feedback comment */}
                                             <textarea
-                                                placeholder="Optional: add a comment about this specific question..."
+                                                placeholder="Leave feedback for this question (optional but helpful)..."
                                                 value={qf?.comment || ''}
                                                 onChange={e => setQFeedback(q.id, 'comment', e.target.value)}
                                                 rows={2}
-                                                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-400 resize-none"
+                                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-400 resize-none"
                                             />
                                         </div>
                                     </div>
@@ -357,109 +355,56 @@ export default function ReviewPeersPage() {
                         })}
                     </div>
 
-                    {/* ── Overall Feedback ── */}
-                    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-5">
-                        <h3 className="font-semibold text-slate-800 mb-1">📝 Overall Feedback</h3>
-                        <p className="text-xs text-slate-400 mb-3">What do you think about this quiz overall? Be specific and constructive.</p>
-                        <textarea
-                            value={overallFeedback}
-                            onChange={e => setOverallFeedback(e.target.value)}
-                            placeholder="e.g. The questions are clear and well-structured. Question 2 might be too easy. Overall a great quiz on this topic!"
-                            rows={4}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-400 resize-none"
-                        />
-
-                        {/* Star Rating */}
-                        <div className="mt-4">
-                            <p className="text-xs font-semibold text-slate-600 mb-2">Overall Quality Rating:</p>
-                            <div className="flex gap-1 items-center">
-                                {[1, 2, 3, 4, 5].map(star => (
-                                    <button
-                                        key={star}
-                                        onMouseEnter={() => setHoverRating(star)}
-                                        onMouseLeave={() => setHoverRating(0)}
-                                        onClick={() => setRating(star)}
-                                        className="text-3xl transition-transform hover:scale-110"
-                                    >
-                                        {star <= (hoverRating || rating) ? '⭐' : '☆'}
-                                    </button>
-                                ))}
-                                {rating > 0 && (
-                                    <span className="ml-2 text-sm text-slate-500">
-                                        {['', 'Poor', 'Fair', 'Good', 'Great', 'Excellent!'][rating]}
-                                    </span>
-                                )}
-                            </div>
+                    {/* Progress summary */}
+                    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 mb-5 flex items-center justify-between">
+                        <div className="flex gap-4 text-sm">
+                            <span className="text-green-600 font-semibold">✅ {approvedCount} Approved</span>
+                            <span className="text-red-500 font-semibold">❌ {rejectedCount} Rejected</span>
+                            <span className="text-slate-400">{totalCount - approvedCount - rejectedCount} remaining</span>
                         </div>
                     </div>
 
-                    {/* ── Suggest to Teacher ── */}
-                    <div className={`rounded-2xl border-2 p-5 mb-6 transition-all ${suggestToTeacher ? 'border-teal-400 bg-teal-50' : 'border-slate-200 bg-white'}`}>
-                        <div className="flex items-start gap-3">
-                            <button
-                                onClick={() => setSuggestToTeacher(v => !v)}
-                                className={`w-6 h-6 rounded-md border-2 flex items-center justify-center shrink-0 mt-0.5 transition-all ${suggestToTeacher ? 'bg-teal-500 border-teal-500' : 'border-slate-300'
-                                    }`}
-                            >
-                                {suggestToTeacher && <span className="text-white text-xs font-bold">✓</span>}
-                            </button>
-                            <div className="flex-1">
-                                <p className="font-semibold text-slate-800 text-sm">
-                                    🏫 Suggest this quiz to the teacher for classroom use
-                                </p>
-                                <p className="text-xs text-slate-500 mt-0.5">
-                                    If you think this quiz is high quality and relevant to the topic, recommend it for the teacher to use.
-                                </p>
-                                {suggestToTeacher && (
-                                    <textarea
-                                        value={suggestReason}
-                                        onChange={e => setSuggestReason(e.target.value)}
-                                        placeholder="Why should the teacher use this quiz? (optional but helpful)"
-                                        rows={2}
-                                        className="mt-3 w-full bg-white border border-teal-300 rounded-xl px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-400 resize-none"
-                                    />
-                                )}
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* ── Submit ── */}
+                    {/* Submit */}
                     <button
                         onClick={handleSubmit}
-                        disabled={submitting}
-                        className="w-full bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-bold py-4 rounded-2xl text-base transition-all flex items-center justify-center gap-2"
+                        disabled={submitting || (approvedCount + rejectedCount < totalCount)}
+                        className="w-full bg-purple-600 hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold py-4 rounded-2xl text-base transition-all flex items-center justify-center gap-2"
                     >
                         {submitting ? (
                             <><div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white" /> Submitting…</>
                         ) : (
-                            '✅ Submit Review'
+                            `✅ Submit Review`
                         )}
                     </button>
+                    {(approvedCount + rejectedCount < totalCount) && (
+                        <p className="text-center text-xs text-slate-400 mt-2">
+                            Rate all questions to enable submit
+                        </p>
+                    )}
                 </div>
             </StudentLayout>
         );
     }
 
-    // ── Render: Quiz List ──────────────────────────────────────────────────
+    // ── Quiz list ──────────────────────────────────────────────────────────
     return (
         <StudentLayout title="Peer Review">
             <div className="max-w-3xl mx-auto p-4 sm:p-6">
 
-                {/* Header */}
                 <div className="mb-6">
                     <h1 className="text-2xl font-bold text-slate-800 mb-1">Peer Review</h1>
                     <p className="text-slate-400 text-sm">
-                        Review your classmates' quizzes — rate quality, give feedback, and suggest great ones to the teacher.
+                        Review your classmates' quizzes anonymously — approve or reject each question.
                     </p>
                 </div>
 
-                {/* ── Topic Search Bar ── */}
+                {/* Topic Filter */}
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-6">
                     <h2 className="text-sm font-semibold text-slate-700 mb-3">🔍 Filter by Topic</h2>
                     <div className="flex gap-3">
                         <select
                             value={selectedTopicId}
-                            onChange={e => { setSelectedTopicId(e.target.value); setSearched(true); }}
+                            onChange={e => setSelectedTopicId(e.target.value)}
                             className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-purple-400"
                         >
                             <option value="">All Topics</option>
@@ -469,16 +414,16 @@ export default function ReviewPeersPage() {
                         </select>
                         {selectedTopicId && (
                             <button
-                                onClick={() => { setSelectedTopicId(''); setSearched(false); }}
+                                onClick={() => setSelectedTopicId('')}
                                 className="px-4 py-2.5 rounded-xl border border-slate-200 text-sm text-slate-500 hover:bg-slate-100 transition-all"
                             >
                                 Clear
                             </button>
                         )}
                     </div>
-                    {selectedTopicId && searched && (
+                    {selectedTopicId && (
                         <p className="text-xs text-purple-600 font-medium mt-2">
-                            📚 Showing quizzes for: <span className="font-bold">{topics.find(t => t.id === selectedTopicId)?.name}</span>
+                            📚 Showing: <span className="font-bold">{topics.find(t => t.id === selectedTopicId)?.name}</span>
                         </p>
                     )}
                 </div>
@@ -489,7 +434,7 @@ export default function ReviewPeersPage() {
                     </div>
                 ) : (
                     <>
-                        {/* ── Pending Reviews ── */}
+                        {/* Pending */}
                         <div className="mb-8">
                             <div className="flex items-center gap-2 mb-4">
                                 <h2 className="text-base font-semibold text-slate-700">Needs Your Review</h2>
@@ -497,32 +442,24 @@ export default function ReviewPeersPage() {
                                     {pendingQuizzes.length}
                                 </span>
                             </div>
-
                             {pendingQuizzes.length === 0 ? (
                                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm py-12 text-center">
                                     <div className="text-4xl mb-3">🎉</div>
                                     <p className="font-semibold text-slate-700">You're all caught up!</p>
                                     <p className="text-sm text-slate-400 mt-1">
-                                        {selectedTopicId
-                                            ? 'No quizzes found for this topic.'
-                                            : 'No quizzes waiting for your review right now.'}
+                                        {selectedTopicId ? 'No quizzes found for this topic.' : 'No quizzes waiting for your review.'}
                                     </p>
                                 </div>
                             ) : (
                                 <div className="space-y-3">
                                     {pendingQuizzes.map(qz => (
-                                        <QuizCard
-                                            key={qz.id}
-                                            quiz={qz}
-                                            reviewed={false}
-                                            onReview={() => openReview(qz)}
-                                        />
+                                        <QuizCard key={qz.id} quiz={qz} reviewed={false} onReview={() => openReview(qz)} topics={topics} />
                                     ))}
                                 </div>
                             )}
                         </div>
 
-                        {/* ── Already Reviewed ── */}
+                        {/* Already reviewed */}
                         {reviewedQuizzes.length > 0 && (
                             <div>
                                 <div className="flex items-center gap-2 mb-4">
@@ -533,12 +470,7 @@ export default function ReviewPeersPage() {
                                 </div>
                                 <div className="space-y-3">
                                     {reviewedQuizzes.map(qz => (
-                                        <QuizCard
-                                            key={qz.id}
-                                            quiz={qz}
-                                            reviewed={true}
-                                            onReview={() => openReview(qz)}
-                                        />
+                                        <QuizCard key={qz.id} quiz={qz} reviewed={true} onReview={() => openReview(qz)} topics={topics} />
                                     ))}
                                 </div>
                             </div>
@@ -551,26 +483,21 @@ export default function ReviewPeersPage() {
 }
 
 // ── Quiz Card ──────────────────────────────────────────────────────────────
-function QuizCard({
-    quiz, reviewed, onReview
-}: {
+function QuizCard({ quiz, reviewed, onReview, topics }: {
     quiz: Quiz;
     reviewed: boolean;
     onReview: () => void;
+    topics: { id: string; name: string }[];
 }) {
-    // Collect unique topic names from questions
     const topicNames = [...new Set(quiz.questions.map(q => q.topicName).filter(Boolean))];
-
     return (
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center justify-between gap-4 hover:shadow-md transition-shadow">
             <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap mb-1">
                     <span className="font-semibold text-slate-800 truncate">{quiz.title}</span>
-                    {quiz.status === 'peer_approved' && (
-                        <span className="text-[10px] bg-teal-100 text-teal-700 font-bold px-2 py-0.5 rounded-full">
-                            🏫 Suggested to teacher
-                        </span>
-                    )}
+                    <span className="text-[10px] bg-slate-100 text-slate-500 font-semibold px-2 py-0.5 rounded-full">
+                        🎭 {quiz.anonymousLabel}
+                    </span>
                     {reviewed && (
                         <span className="text-[10px] bg-green-100 text-green-700 font-bold px-2 py-0.5 rounded-full">
                             ✓ Reviewed
@@ -578,7 +505,7 @@ function QuizCard({
                     )}
                 </div>
                 <p className="text-xs text-slate-400">
-                    By {quiz.createdByName} · {quiz.questions.length} question{quiz.questions.length !== 1 ? 's' : ''}
+                    {quiz.questions.length} question{quiz.questions.length !== 1 ? 's' : ''}
                 </p>
                 {topicNames.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1.5">
