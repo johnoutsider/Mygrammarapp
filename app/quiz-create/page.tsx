@@ -1,13 +1,14 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { Plus, Clock, X, Copy, Trash2, ChevronDown, Menu } from 'lucide-react';
 import { auth, db } from '@/lib/firebase';
 import { getUserProfile, UserProfile } from '@/lib/auth';
 import { onAuthStateChanged } from 'firebase/auth';
-import { collection, onSnapshot, query, orderBy, doc, updateDoc, arrayUnion } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, doc, updateDoc, arrayUnion, getDoc, serverTimestamp } from 'firebase/firestore';
 import { submitQuizForReview } from '@/lib/quizService';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 type QuestionType = 'quiz' | 'true_or_false';
 
@@ -65,13 +66,16 @@ const defaultQuestion = (id: number, type: QuestionType = 'quiz'): FullQuestion 
     answers: type === 'quiz' ? makeQuizAnswers() : makeTFAnswers(),
 });
 
-// Auto-expand textarea helper
 const autoResize = (el: HTMLTextAreaElement) => {
     el.style.height = 'auto';
     el.style.height = el.scrollHeight + 'px';
 };
 
-export default function QuizCreatorPage() {
+// ── Inner component (uses useSearchParams) ────────────────────────────────
+function QuizCreatorPage() {
+    const router = useRouter();
+    const searchParams = useSearchParams();
+
     const [title, setTitle] = useState('');
     const [questions, setQuestions] = useState<FullQuestion[]>([defaultQuestion(1)]);
     const [activeIdx, setActiveIdx] = useState(0);
@@ -85,9 +89,11 @@ export default function QuizCreatorPage() {
     const [addingSubtopic, setAddingSubtopic] = useState(false);
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [propsOpen, setPropsOpen] = useState(false);
+    const [editId, setEditId] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const questionTextareaRef = useRef<HTMLTextAreaElement>(null);
 
+    // Auth
     useEffect(() => {
         const unsub = onAuthStateChanged(auth, async (u) => {
             if (u) setUserProfile(await getUserProfile(u.uid));
@@ -95,6 +101,7 @@ export default function QuizCreatorPage() {
         return () => unsub();
     }, []);
 
+    // Topics
     useEffect(() => {
         const q = query(collection(db, 'topics'), orderBy('createdAt', 'asc'));
         const unsub = onSnapshot(q, (snap) => {
@@ -103,13 +110,32 @@ export default function QuizCreatorPage() {
         return () => unsub();
     }, []);
 
-    // Reset question textarea height on question switch
+    // Auto-resize textarea on question switch
     useEffect(() => {
         const el = questionTextareaRef.current;
         if (!el) return;
         el.style.height = 'auto';
         el.style.height = el.scrollHeight + 'px';
     }, [activeIdx, questions[activeIdx]?.text]);
+
+    // Edit mode: load existing quiz when ?edit=<id>
+    useEffect(() => {
+        const id = searchParams.get('edit');
+        if (!id) return;
+        const loadQuiz = async () => {
+            try {
+                const snap = await getDoc(doc(db, 'quizzes', id));
+                if (!snap.exists()) return;
+                const data = snap.data() as any;
+                if (data.title) setTitle(data.title);
+                if (data.questions) setQuestions(data.questions);
+                setEditId(id);
+            } catch (e) {
+                console.error('Failed to load quiz for edit:', e);
+            }
+        };
+        loadQuiz();
+    }, [searchParams]);
 
     const current = questions[activeIdx];
     const selectedTopic = topics.find(t => t.id === current.topicId);
@@ -128,6 +154,13 @@ export default function QuizCreatorPage() {
         setQuestions(prev => prev.map((q, i) =>
             i === activeIdx
                 ? { ...q, answers: q.answers.map(a => a.id === answerId ? { ...a, explanation } : a) }
+                : q
+        ));
+
+    const setCorrectAnswer = (answerId: number) =>
+        setQuestions(prev => prev.map((q, i) =>
+            i === activeIdx
+                ? { ...q, answers: q.answers.map(a => ({ ...a, isCorrect: a.id === answerId })) }
                 : q
         ));
 
@@ -182,7 +215,8 @@ export default function QuizCreatorPage() {
             err => { console.error(err); setUploading(false); },
             async () => {
                 updateQuestion('imageUrl', await getDownloadURL(task.snapshot.ref));
-                setUploading(false); setUploadProgress(0);
+                setUploading(false);
+                setUploadProgress(0);
             }
         );
     };
@@ -190,10 +224,40 @@ export default function QuizCreatorPage() {
     const handleSave = async () => {
         if (!title.trim()) return alert('Please add a quiz title!');
         if (!userProfile) return alert('You must be signed in.');
+
+        const missing = questions.findIndex(q => !q.answers.some(a => a.isCorrect));
+        if (missing !== -1) {
+            setActiveIdx(missing);
+            return alert(`Question ${missing + 1} has no correct answer selected.`);
+        }
+
+        const incomplete = questions.findIndex(
+            q => q.type === 'quiz' && q.answers.filter(a => a.text.trim()).length < 2
+        );
+        if (incomplete !== -1) {
+            setActiveIdx(incomplete);
+            return alert(`Question ${incomplete + 1} needs at least 2 answer options filled in.`);
+        }
+
         try {
             setSaveLabel('Saving...');
-            await submitQuizForReview({ title, questions }, userProfile.uid, userProfile.classId);
-            setSaveLabel('✓ Submitted for peer review!');
+            if (editId) {
+                await updateDoc(doc(db, 'quizzes', editId), {
+                    title,
+                    questions,
+                    status: 'pending',
+                    updatedAt: serverTimestamp(),
+                });
+                setSaveLabel('✓ Quiz updated!');
+            } else {
+                await submitQuizForReview(
+                    { title, questions },
+                    userProfile.uid,
+                    userProfile.classId,
+                    { status: 'pending', createdBy: userProfile.uid }
+                );
+                setSaveLabel('✓ Submitted for peer review!');
+            }
         } catch (err) {
             console.error(err);
             setSaveLabel('Error saving — check console');
@@ -248,7 +312,6 @@ export default function QuizCreatorPage() {
             {/* ── Top Bar ── */}
             <div className="flex items-center justify-between px-3 py-2 bg-white border-b shadow-sm z-10 gap-2">
                 <div className="flex items-center gap-2 flex-1 min-w-0">
-                    {/* Mobile sidebar toggle */}
                     <button onClick={() => setSidebarOpen(true)} className="lg:hidden p-1.5 rounded hover:bg-gray-100">
                         <Menu size={18} className="text-gray-600" />
                     </button>
@@ -262,17 +325,15 @@ export default function QuizCreatorPage() {
                     <span className="text-xs text-gray-400 hidden sm:block whitespace-nowrap">✓ {saveLabel}</span>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                    {/* Mobile properties toggle */}
                     <button onClick={() => setPropsOpen(true)} className="lg:hidden p-1.5 rounded hover:bg-gray-100 border border-gray-200">
                         <ChevronDown size={16} className="text-gray-600" />
                     </button>
                     <button onClick={handleSave} className="bg-green-500 hover:bg-green-600 text-white rounded px-3 py-1.5 text-sm font-semibold">
-                        Save
+                        {editId ? 'Update' : 'Save'}
                     </button>
-                    <button onClick={() => window.history.back()} className="bg-white border border-gray-300 hover:bg-gray-50 text-black rounded px-3 py-1.5 text-sm font-semibold">
+                    <button onClick={() => router.back()} className="bg-white border border-gray-300 hover:bg-gray-50 text-black rounded px-3 py-1.5 text-sm font-semibold">
                         Exit
                     </button>
-
                 </div>
             </div>
 
@@ -280,30 +341,36 @@ export default function QuizCreatorPage() {
 
                 {/* ── Left Sidebar ── */}
                 <div className={`
-          bg-gray-800 flex flex-col p-3 gap-2 overflow-y-auto z-40 transition-all duration-300
-          fixed top-0 left-0 h-full w-52 pt-16
-          lg:relative lg:w-40 lg:pt-3 lg:translate-x-0
-          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-        `}>
-                    {/* Close button on mobile */}
+                    bg-gray-800 flex flex-col p-3 gap-2 overflow-y-auto z-40 transition-all duration-300
+                    fixed top-0 left-0 h-full w-52 pt-16
+                    lg:relative lg:w-40 lg:pt-3 lg:translate-x-0
+                    ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+                `}>
                     <button onClick={() => setSidebarOpen(false)} className="lg:hidden absolute top-3 right-3 text-gray-400 hover:text-white">
                         <X size={18} />
                     </button>
-
-                    <div className="text-white text-xs font-semibold mb-1">{questions.length} Quiz</div>
-                    {questions.map((q, i) => (
-                        <div
-                            key={q.id}
-                            onClick={() => { setActiveIdx(i); setSidebarOpen(false); }}
-                            className={`rounded p-2 cursor-pointer text-xs text-white transition ${i === activeIdx ? 'bg-purple-600 ring-2 ring-white' : 'bg-gray-600 hover:bg-gray-500'
-                                }`}
-                        >
-                            <div className="text-gray-300 text-[10px] mb-0.5">
-                                {q.type === 'true_or_false' ? '✓/✗ True or False' : '📊 Quiz'}
+                    <div className="text-white text-xs font-semibold mb-1">{questions.length} Question{questions.length !== 1 ? 's' : ''}</div>
+                    {questions.map((q, i) => {
+                        const hasCorrect = q.answers.some(a => a.isCorrect);
+                        return (
+                            <div
+                                key={q.id}
+                                onClick={() => { setActiveIdx(i); setSidebarOpen(false); }}
+                                className={`rounded p-2 cursor-pointer text-xs text-white transition ${i === activeIdx ? 'bg-purple-600 ring-2 ring-white' : 'bg-gray-600 hover:bg-gray-500'
+                                    }`}
+                            >
+                                <div className="flex items-center justify-between mb-0.5">
+                                    <span className="text-gray-300 text-[10px]">
+                                        {q.type === 'true_or_false' ? '✓/✗ True or False' : '📊 Quiz'}
+                                    </span>
+                                    {!hasCorrect && (
+                                        <span title="No correct answer selected" className="text-yellow-400 text-[10px]">⚠️</span>
+                                    )}
+                                </div>
+                                <div className="truncate">{q.text || `Question ${i + 1}`}</div>
                             </div>
-                            <div className="truncate">{q.text || `Question ${i + 1}`}</div>
-                        </div>
-                    ))}
+                        );
+                    })}
                     <button
                         onClick={() => setShowTypePicker(true)}
                         className="mt-2 flex items-center justify-center gap-1 bg-purple-600 hover:bg-purple-700 text-white rounded px-2 py-2 text-sm font-semibold w-full"
@@ -317,12 +384,23 @@ export default function QuizCreatorPage() {
                     className="flex-1 flex flex-col items-center justify-start p-3 sm:p-6 overflow-y-auto"
                     style={{ background: 'linear-gradient(135deg, #4a1d8f 0%, #6b21a8 50%, #7c3aed 100%)' }}
                 >
-                    {/* Type badge */}
+                    {editId && (
+                        <div className="w-full max-w-3xl mb-3 px-4 py-2 bg-blue-500/80 rounded-lg text-center text-white text-xs font-semibold">
+                            ✏️ Edit Mode — changes will reset status to Pending
+                        </div>
+                    )}
+
                     <div className="w-full max-w-3xl flex justify-center mb-2">
                         <span className="bg-white/20 text-white text-xs px-3 py-1 rounded-full font-medium">
                             {current.type === 'true_or_false' ? '✓/✗ True or False' : '📊 Quiz'}
                         </span>
                     </div>
+
+                    {!current.answers.some(a => a.isCorrect) && (
+                        <div className="w-full max-w-3xl mb-3 px-4 py-2 bg-yellow-400/90 rounded-lg text-center text-yellow-900 text-xs font-semibold">
+                            ⚠️ Tap the shape / card below to select the correct answer
+                        </div>
+                    )}
 
                     {/* Question textarea */}
                     <div className="w-full max-w-3xl bg-white rounded-xl shadow mb-4">
@@ -370,15 +448,27 @@ export default function QuizCreatorPage() {
                         )}
                     </div>
 
-                    {/* ── Quiz: answer boxes ── */}
+                    {/* ── Quiz answer boxes ── */}
                     {current.type === 'quiz' && (
                         <div className="w-full max-w-3xl grid grid-cols-1 sm:grid-cols-2 gap-3">
                             {current.answers.map((answer, idx) => (
-                                <div key={answer.id} className={`${QUIZ_STYLES[idx].bg} rounded-xl flex flex-col shadow-lg overflow-hidden`}>
+                                <div
+                                    key={answer.id}
+                                    className={`${QUIZ_STYLES[idx].bg} rounded-xl flex flex-col shadow-lg overflow-hidden transition-all
+                                        ${answer.isCorrect ? 'ring-4 ring-white scale-[1.02]' : 'opacity-90 hover:opacity-100'}
+                                    `}
+                                >
                                     <div className="flex items-start gap-3 px-4 sm:px-5 py-3">
-                                        <span className="text-white text-lg sm:text-xl font-bold w-7 text-center select-none mt-0.5">
-                                            {QUIZ_STYLES[idx].shape}
-                                        </span>
+                                        <button
+                                            type="button"
+                                            onClick={() => setCorrectAnswer(answer.id)}
+                                            title="Click to mark as correct answer"
+                                            className={`text-white text-lg sm:text-xl font-bold w-7 text-center select-none mt-0.5 shrink-0 rounded-full transition-all
+                                                ${answer.isCorrect ? 'bg-white/40 ring-2 ring-white scale-125' : 'hover:bg-white/20'}
+                                            `}
+                                        >
+                                            {answer.isCorrect ? '✓' : QUIZ_STYLES[idx].shape}
+                                        </button>
                                         <textarea
                                             placeholder={idx < 2 ? `Add answer ${idx + 1}` : `Add answer ${idx + 1} (optional)`}
                                             value={answer.text}
@@ -388,6 +478,11 @@ export default function QuizCreatorPage() {
                                             onInput={e => autoResize(e.currentTarget)}
                                             className="flex-1 bg-transparent text-white placeholder-white/70 border-none outline-none text-sm font-medium leading-relaxed"
                                         />
+                                        {answer.isCorrect && (
+                                            <span className="text-[10px] bg-white/30 text-white font-bold px-2 py-0.5 rounded-full shrink-0 self-center">
+                                                Correct
+                                            </span>
+                                        )}
                                     </div>
                                     <div className="bg-black/20 px-4 sm:px-5 py-2 flex items-start gap-2">
                                         <span className="text-white/60 text-xs mt-1">💬</span>
@@ -410,17 +505,30 @@ export default function QuizCreatorPage() {
                     {current.type === 'true_or_false' && (
                         <div className="w-full max-w-3xl grid grid-cols-2 gap-3 sm:gap-4">
                             {current.answers.map((answer, idx) => (
-                                <div key={answer.id} className={`${TF_STYLES[idx].bg} rounded-xl flex flex-col shadow-lg overflow-hidden`}>
-                                    <div className="flex flex-col items-center justify-center gap-1 py-5 sm:py-6">
+                                <div
+                                    key={answer.id}
+                                    onClick={() => setCorrectAnswer(answer.id)}
+                                    title="Click to mark as correct answer"
+                                    className={`${TF_STYLES[idx].bg} rounded-xl flex flex-col shadow-lg overflow-hidden cursor-pointer transition-all select-none
+                                        ${answer.isCorrect ? 'ring-4 ring-white scale-[1.02]' : 'opacity-80 hover:opacity-100'}
+                                    `}
+                                >
+                                    <div className="flex flex-col items-center justify-center gap-1 py-5 sm:py-6 relative">
                                         <span className="text-white text-3xl sm:text-4xl font-bold">{TF_STYLES[idx].shape}</span>
                                         <span className="text-white text-lg sm:text-xl font-bold">{TF_STYLES[idx].label}</span>
+                                        {answer.isCorrect && (
+                                            <span className="absolute top-2 right-2 text-[10px] bg-white/30 text-white font-bold px-2 py-0.5 rounded-full">
+                                                Correct ✓
+                                            </span>
+                                        )}
                                     </div>
                                     <div className="bg-black/20 px-3 sm:px-4 py-2 flex items-start gap-2">
                                         <span className="text-white/60 text-xs mt-1">💬</span>
                                         <textarea
                                             placeholder={`Why is ${TF_STYLES[idx].label} correct or incorrect?`}
                                             value={answer.explanation}
-                                            onChange={e => updateExplanation(answer.id, e.target.value)}
+                                            onChange={e => { e.stopPropagation(); updateExplanation(answer.id, e.target.value); }}
+                                            onClick={e => e.stopPropagation()}
                                             rows={1}
                                             style={{ resize: 'none', overflow: 'hidden' }}
                                             onInput={e => autoResize(e.currentTarget)}
@@ -432,23 +540,21 @@ export default function QuizCreatorPage() {
                         </div>
                     )}
 
-                    {/* Bottom padding for mobile */}
                     <div className="h-8" />
                 </div>
 
-                {/* ── Right Sidebar (desktop) / Bottom Sheet (mobile) ── */}
-                {/* Mobile overlay */}
+                {/* ── Right Sidebar ── */}
                 {propsOpen && (
                     <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setPropsOpen(false)} />
                 )}
 
                 <div className={`
-          bg-white border-t lg:border-t-0 lg:border-l shadow-sm p-4 flex flex-col gap-4 overflow-y-auto z-40
-          fixed bottom-0 left-0 right-0 max-h-[80vh] rounded-t-2xl
-          lg:relative lg:w-64 lg:max-h-full lg:rounded-none lg:translate-y-0
-          transition-transform duration-300
-          ${propsOpen ? 'translate-y-0' : 'translate-y-full lg:translate-y-0'}
-        `}>
+                    bg-white border-t lg:border-t-0 lg:border-l shadow-sm p-4 flex flex-col gap-4 overflow-y-auto z-40
+                    fixed bottom-0 left-0 right-0 max-h-[80vh] rounded-t-2xl
+                    lg:relative lg:w-64 lg:max-h-full lg:rounded-none lg:translate-y-0
+                    transition-transform duration-300
+                    ${propsOpen ? 'translate-y-0' : 'translate-y-full lg:translate-y-0'}
+                `}>
                     <div className="flex items-center justify-between">
                         <span className="font-semibold text-sm text-gray-800">Question properties</span>
                         <button onClick={() => setPropsOpen(false)} className="lg:hidden">
@@ -559,5 +665,18 @@ export default function QuizCreatorPage() {
                 </div>
             </div>
         </div>
+    );
+}
+
+// ── Single default export wrapped in Suspense ─────────────────────────────
+export default function Page() {
+    return (
+        <Suspense fallback={
+            <div className="min-h-screen flex items-center justify-center bg-gray-100">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-purple-500" />
+            </div>
+        }>
+            <QuizCreatorPage />
+        </Suspense>
     );
 }

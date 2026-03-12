@@ -2,19 +2,17 @@ import { db } from './firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
 export async function submitQuizForReview(
-    quizData: any,
+    quiz: { title: string; questions: any[] },
     userId: string,
-    classId: string
+    classId: string,
+    extra?: Record<string, any>   // ← add this param
 ) {
-    const ref = await addDoc(collection(db, 'quizzes'), {
-        ...quizData,
+    await addDoc(collection(db, 'quizzes'), {
+        ...quiz,
         createdBy: userId,
         classId,
-        status: 'pending_peer_review',
-        peerReviews: [],
-        teacherFeedback: null,
-        approvedAt: null,
+        status: 'pending',        // ← always set on save
         createdAt: serverTimestamp(),
+        ...extra,                 // ← spreads createdBy + status safely
     });
-    return ref.id;
 }

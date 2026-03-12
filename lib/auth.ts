@@ -11,12 +11,14 @@ export interface UserProfile {
     uid: string
     email: string
     name: string
+    displayName?: string
     role: 'teacher' | 'student'
     classId: string
     telegramChatId?: string
     telegramUsername?: string
     createdAt: Date
 }
+
 
 export async function signInWithGoogle(): Promise<UserProfile | null> {
     try {
