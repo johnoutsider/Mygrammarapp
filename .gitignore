@@ -1,0 +1,19 @@
+.env.local
+node_modules/
+.next/
+out/
+dist/
+build/
+
+# Firebase
+.firebase/
+firebase-debug.log
+firestore-debug.log
+
+# Logs and Temp
+dev-3012.*.log
+dev-3012.log
+.codex-temp/
+*.txt
+build.log
+build_output.log

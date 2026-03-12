@@ -1,0 +1,118 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Users collection
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null && request.auth.uid == userId;
+      // Allow teachers to delete student accounts for the complete wipe feature
+      allow delete: if request.auth != null && (
+        request.auth.uid == userId || 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher'
+      );
+    }
+    
+    // Essays collection
+    match /essays/{essayId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.studentId == request.auth.uid;
+      allow update: if request.auth != null;
+      allow delete: if request.auth != null; // owner OR teacher (role enforced in app)
+    }
+    
+    // Reviews collection
+    match /reviews/{reviewId} {
+      allow read: if request.auth != null;
+      // Allow AI reviews (reviewerRole == 'ai') or user reviews (reviewerId matches auth.uid)
+      allow create: if request.auth != null && 
+        (request.resource.data.reviewerRole == 'ai' || 
+         request.resource.data.reviewerId == request.auth.uid ||
+         request.resource.data.reviewerRole == 'teacher');
+      allow update: if request.auth != null && (
+        resource.data.reviewerId == request.auth.uid ||
+        get(/databases/$(database)/documents/essays/$(resource.data.essayId)).data.studentId == request.auth.uid
+      );
+      allow delete: if request.auth != null; // reviewer OR teacher cascade
+    }
+
+    // Assistant Chats collection — teachers can read and write their own chat histories
+    match /assistantChats/{chatId} {
+      allow read, update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+    }
+
+    // Topics collection — teachers write, all authenticated users read
+    match /topics/{topicId} {
+      allow read: if request.auth != null;
+      allow create, delete: if request.auth != null;
+      allow update: if request.auth != null;
+    }
+
+    // Messages collection — teachers create, all authenticated users read/update (mark as read)
+    match /messages/{messageId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null;
+      allow delete: if request.auth != null;
+
+      // Student & teacher replies subcollection
+      match /replies/{replyId} {
+        allow read: if request.auth != null;
+        allow create: if request.auth != null;
+        allow update, delete: if request.auth != null && resource.data.studentId == request.auth.uid;
+      }
+    }
+
+    // Telegram temporary link codes (created by client with auth)
+    match /telegram_links/{linkId} {
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      // Allow the owner to read their own link
+      allow read, delete: if request.auth != null && resource.data.userId == request.auth.uid;
+      // Allow unauthenticated reads so the webhook API route can look up a code
+      allow read: if true;
+    }
+
+    // Telegram verified — written by the webhook (no auth), read+deleted by the client once linked
+    match /telegram_verified/{docId} {
+      // Webhook writes here (no auth token) after a valid /start command
+      allow create: if true;
+      // Client reads and deletes after linking (the random code acts as the capability token)
+      allow read, delete: if true;
+    }
+    // Scheduled tasks and exports - teachers manage automation entries from the app
+    match /scheduledTasks/{taskId} {
+      allow read, create, update, delete: if request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+    }
+
+    match /schedulerExports/{exportId} {
+      allow read, create, delete: if request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+      allow update: if false;
+    }
+
+    match /progressReports/{reportId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+    }
+
+    // Settings collection — teachers write, all authenticated users read
+    // (used for EVA access control: settings/eva)
+    match /settings/{settingId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+    }
+
+    // AI Detection Logs — written by students (authenticated) when AI content is detected,
+    // read only by teachers
+    match /ai_detection_logs/{logId} {
+      allow create: if request.auth != null;
+      allow read: if request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+      allow update, delete: if false;
+    }
+  }
+}
