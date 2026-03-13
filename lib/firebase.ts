@@ -1,6 +1,8 @@
 import { initializeApp, getApps } from 'firebase/app'
 import { getAuth } from 'firebase/auth'
 import { getFirestore, enableIndexedDbPersistence } from 'firebase/firestore'
+import { getDatabase } from 'firebase/database'
+
 
 const firebaseConfig = {
     apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || 'demo-key',
@@ -9,6 +11,7 @@ const firebaseConfig = {
     storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || 'demo.appspot.com',
     messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || '123456789',
     appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || '1:123:web:abc',
+    databaseURL: process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL,   // ← ADD this line
 }
 
 // Check if Firebase is properly configured
@@ -32,4 +35,5 @@ if (typeof window !== 'undefined') {
     });
 }
 
+export const rtdb = getDatabase(app)   // ← ADD this line
 export { app, auth, db }

@@ -8,9 +8,13 @@ import { onAuthStateChanged } from 'firebase/auth'
 import { collection, query, where, getDocs } from 'firebase/firestore'
 import StudentLayout from '@/components/StudentLayout'
 import IELTSRubric from '@/components/IELTSRubric'
+import { onActiveGame, joinGame } from '@/lib/gameService'
+import type { ActiveGame } from '@/lib/gameService'
 
 export default function Dashboard() {
     const router = useRouter()
+    const [activeGame, setActiveGame] = useState<ActiveGame | null>(null)
+    const [currentUser, setCurrentUser] = useState<any>(null)
     const [loading, setLoading] = useState(true)
     const [stats, setStats] = useState({
         submittedEssays: 0,
@@ -61,11 +65,23 @@ export default function Dashboard() {
             }
 
             setLoading(false)
+            setCurrentUser(user)
         })
 
         return () => unsubscribe()
-    }, [router])
+    }, [router])                   // ← first useEffect closes here
 
+    useEffect(() => {              // ✅ separate, top-level useEffect
+        const unsub = onActiveGame(setActiveGame)
+        return unsub
+    }, [])
+
+    const handleJoin = async () => {
+        if (!activeGame || !currentUser) return
+        const profile = await import('@/lib/auth').then(m => m.getUserProfile(currentUser.uid))
+        await joinGame(currentUser.uid, profile?.name || currentUser.displayName || 'Student')
+        router.push('/play')
+    }
     if (loading) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -81,6 +97,23 @@ export default function Dashboard() {
                     <h1 className="text-4xl font-bold text-slate-900 mb-2">Welcome Back!</h1>
                     <p className="text-slate-500">Here&apos;s your writing progress</p>
                 </div>
+                {activeGame && activeGame.status === 'lobby' && (
+                    <div className="mb-6 rounded-2xl bg-gradient-to-r from-violet-600 to-indigo-600 p-5 text-white shadow-lg flex items-center justify-between">
+                        <div>
+                            <p className="text-sm font-medium opacity-80">🎮 Game is Live!</p>
+                            <p className="text-xl font-bold">{activeGame.quizTitle}</p>
+                            <p className="text-sm opacity-70 mt-0.5">
+                                {Object.keys(activeGame.players || {}).length} players in lobby
+                            </p>
+                        </div>
+                        <button
+                            onClick={handleJoin}
+                            className="bg-white text-violet-700 font-bold px-6 py-3 rounded-xl shadow hover:scale-105 transition-transform"
+                        >
+                            Join Game →
+                        </button>
+                    </div>
+                )}
 
                 {/* Stats Cards */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 md:gap-6 mb-8">
