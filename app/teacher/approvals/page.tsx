@@ -4,375 +4,690 @@ import { useState, useEffect } from 'react'
 import TeacherLayout from '@/components/TeacherLayout'
 import { auth, db } from '@/lib/firebase'
 import {
-    addDoc,
-    collection,
-    doc,
-    getDoc,
-    getDocs,
-    query,
-    serverTimestamp,
-    updateDoc,
+    collection, doc, getDocs,
+    updateDoc, serverTimestamp, addDoc,
 } from 'firebase/firestore'
+import { onAuthStateChanged } from 'firebase/auth'
 
-interface PendingEssay {
-    id: string
-    title: string
-    topicName: string
-    studentName: string
-    studentId: string
-    content: string
-    submittedAt: any
-    status: string
-    approvedBy?: string
-    rejectedBy?: string
-    rejectionReason?: string
+// ── Config ─────────────────────────────────────────────────────────────────────
+
+const PEER_THRESHOLD = 3 // number of peer reviews before a quiz escalates to teacher
+
+// ── Types ──────────────────────────────────────────────────────────────────────
+
+interface Answer {
+    id: number
+    text: string
+    isCorrect: boolean
+    explanation: string
 }
 
-export default function TeacherApprovalsPage() {
-    const [essays, setEssays] = useState<PendingEssay[]>([])
-    const [archivedEssays, setArchivedEssays] = useState<PendingEssay[]>([])
+interface Question {
+    id: number
+    type: 'quiz' | 'true_or_false'
+    text: string
+    answers: Answer[]
+    topicName?: string
+    subtopic?: string
+    timeLimit: number
+}
+
+interface QuestionFeedback {
+    questionId: number
+    verdict: 'approved' | 'rejected' | ''
+    comment: string
+}
+
+interface PeerReview {
+    id: string
+    quizId: string
+    reviewerName: string
+    overallVerdict: 'approved' | 'rejected' | 'mixed'
+    questionFeedback: QuestionFeedback[]
+    createdAt: any
+}
+
+interface PendingQuiz {
+    id: string
+    title: string
+    createdBy: string
+    contributorName: string
+    status: string
+    createdAt: any
+    questions: Question[]
+    peerReviews: PeerReview[]
+    peerApprovedCount: number
+    peerRejectedCount: number
+    teacherNote?: string
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function fmtDate(val: any): string {
+    if (!val) return '—'
+    if (val.toDate) return val.toDate().toLocaleDateString()
+    if (val.seconds) return new Date(val.seconds * 1000).toLocaleDateString()
+    return '—'
+}
+
+// ── Peer Review Summary ────────────────────────────────────────────────────────
+
+function PeerReviewSummary({ reviews, questions }: {
+    reviews: PeerReview[]
+    questions: Question[]
+}) {
+    if (reviews.length === 0) {
+        return <p className="text-sm text-slate-400 italic py-4 text-center">No peer reviews yet.</p>
+    }
+
+    return (
+        <div className="space-y-3">
+            {reviews.map((r, ri) => {
+                const verdictCls =
+                    r.overallVerdict === 'approved' ? 'bg-green-100 text-green-700' :
+                        r.overallVerdict === 'rejected' ? 'bg-red-100 text-red-700' :
+                            'bg-amber-100 text-amber-700'
+                const verdictIcon =
+                    r.overallVerdict === 'approved' ? '✅' :
+                        r.overallVerdict === 'rejected' ? '❌' : '⚠️'
+
+                return (
+                    <div key={r.id} className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                            <p className="text-sm font-semibold text-slate-700">
+                                🎭 Peer {ri + 1}
+                                <span className="ml-2 text-xs text-slate-400 font-normal">{fmtDate(r.createdAt)}</span>
+                            </p>
+                            <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${verdictCls}`}>
+                                {verdictIcon} {r.overallVerdict.charAt(0).toUpperCase() + r.overallVerdict.slice(1)}
+                            </span>
+                        </div>
+                        <div className="space-y-1.5">
+                            {r.questionFeedback.map((qf, qi) => {
+                                const q = questions.find(q => q.id === qf.questionId)
+                                const ok = qf.verdict === 'approved'
+                                return (
+                                    <div key={qi} className="flex items-start gap-2 text-xs">
+                                        <span className={`mt-0.5 font-bold shrink-0 ${ok ? 'text-green-500' : 'text-red-400'}`}>
+                                            {ok ? '✓' : '✗'}
+                                        </span>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-slate-600 truncate">
+                                                Q{qi + 1}: {q?.text || `Question ${qf.questionId}`}
+                                            </p>
+                                            {qf.comment && (
+                                                <p className="text-slate-400 italic mt-0.5">"{qf.comment}"</p>
+                                            )}
+                                        </div>
+                                    </div>
+                                )
+                            })}
+                        </div>
+                    </div>
+                )
+            })}
+        </div>
+    )
+}
+
+// ── Quiz Row Card ──────────────────────────────────────────────────────────────
+
+function QuizRow({ quiz, onReview, archived }: {
+    quiz: PendingQuiz
+    onReview: () => void
+    archived?: boolean
+}) {
+    const approvedPct = quiz.peerReviews.length > 0
+        ? Math.round((quiz.peerApprovedCount / quiz.peerReviews.length) * 100)
+        : 0
+
+    const statusLabel =
+        quiz.status === 'teacher_approved'
+            ? { text: '✅ Approved', cls: 'bg-green-100 text-green-700' }
+            : quiz.status === 'rejected'
+                ? { text: '❌ Rejected', cls: 'bg-red-100 text-red-700' }
+                : { text: '⏳ Awaiting Your Review', cls: 'bg-amber-100 text-amber-700' }
+
+    return (
+        <div className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${archived ? 'opacity-80 border-slate-200' : 'border-amber-200'}`}>
+            <div className="px-5 py-4 flex flex-col sm:flex-row sm:items-center gap-3">
+                <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap mb-1">
+                        <h3 className="font-bold text-slate-800 truncate">{quiz.title || '(Untitled Quiz)'}</h3>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${statusLabel.cls}`}>
+                            {statusLabel.text}
+                        </span>
+                    </div>
+                    <p className="text-xs text-slate-400">
+                        👤 {quiz.contributorName}
+                        <span className="mx-1.5">·</span>
+                        📅 {fmtDate(quiz.createdAt)}
+                        <span className="mx-1.5">·</span>
+                        {quiz.questions.length} question{quiz.questions.length !== 1 ? 's' : ''}
+                    </p>
+                    <div className="flex items-center gap-3 mt-2">
+                        <div className="flex-1 max-w-[180px] bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                            <div
+                                className="h-1.5 rounded-full bg-green-400 transition-all"
+                                style={{ width: `${approvedPct}%` }}
+                            />
+                        </div>
+                        <p className="text-[10px] text-slate-500 shrink-0">
+                            <span className="text-green-600 font-bold">{quiz.peerApprovedCount}</span>
+                            <span className="mx-1">/</span>
+                            {quiz.peerReviews.length} peer{quiz.peerReviews.length !== 1 ? 's' : ''} approved
+                        </p>
+                    </div>
+                </div>
+                <button
+                    onClick={onReview}
+                    className={`shrink-0 px-4 py-2 rounded-xl text-sm font-bold transition-all ${archived
+                        ? 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        : 'bg-amber-500 hover:bg-amber-600 text-white shadow-sm'
+                        }`}
+                >
+                    {archived ? '👁 View' : '📋 Review'}
+                </button>
+            </div>
+            {quiz.status === 'rejected' && quiz.teacherNote && (
+                <div className="mx-5 mb-4 bg-red-50 border border-red-100 rounded-xl px-4 py-2.5 text-xs text-red-700">
+                    <span className="font-bold">💬 Your note:</span> {quiz.teacherNote}
+                </div>
+            )}
+        </div>
+    )
+}
+
+// ── Main Page ──────────────────────────────────────────────────────────────────
+
+export default function ApprovalsPage() {
+    const [pendingQuizzes, setPendingQuizzes] = useState<PendingQuiz[]>([])
+    const [archivedQuizzes, setArchivedQuizzes] = useState<PendingQuiz[]>([])
     const [loading, setLoading] = useState(true)
 
-    // Modal state
-    const [selectedEssay, setSelectedEssay] = useState<PendingEssay | null>(null)
-    const [rejectReason, setRejectReason] = useState('')
-    const [rejecting, setRejecting] = useState(false)
+    const [selected, setSelected] = useState<PendingQuiz | null>(null)
+    const [activeTab, setActiveTab] = useState<'questions' | 'peer_reviews'>('questions')
+    const [teacherNote, setTeacherNote] = useState('')
     const [approving, setApproving] = useState(false)
+    const [rejecting, setRejecting] = useState(false)
 
-    // Load essays pending approval
+    const [stats, setStats] = useState({
+        totalPending: 0,
+        totalApproved: 0,
+        totalRejected: 0,
+        totalPeerReviewed: 0,
+    })
+
     useEffect(() => {
-        const loadPending = async () => {
-            try {
-                // Fetch essays that are either pending approval OR were previously flagged and resolved (have requiresTeacherApproval flag or were approved/rejected by teacher)
-                // We'll just fetch all essays and filter client side since the volume is low and we need complex OR conditions
-                const snap = await getDocs(collection(db, 'essays'))
-                let allFlags = snap.docs.map(d => ({ id: d.id, ...d.data() } as PendingEssay))
-                    .filter(e =>
-                        e.status === 'pending_teacher_approval' ||
-                        e.approvedBy ||
-                        e.rejectedBy ||
-                        (e.status === 'rejected' && e.rejectionReason)
-                    )
-
-                // Sort by newest first
-                allFlags.sort((a, b) => (b.submittedAt?.toMillis?.() ?? 0) - (a.submittedAt?.toMillis?.() ?? 0))
-
-                const pending = allFlags.filter(e => e.status === 'pending_teacher_approval')
-                const archived = allFlags.filter(e => e.status !== 'pending_teacher_approval')
-
-                setEssays(pending)
-                setArchivedEssays(archived)
-            } catch (err) {
-                console.error('Failed to load approvals:', err)
-            } finally {
-                setLoading(false)
-            }
-        }
-        loadPending()
+        const unsub = onAuthStateChanged(auth, async (user) => {
+            if (!user) return
+            await loadData()
+        })
+        return () => unsub()
     }, [])
 
+    const loadData = async () => {
+        setLoading(true)
+        try {
+            // Build user name map
+            const userSnap = await getDocs(collection(db, 'users'))
+            const nameMap: Record<string, string> = {}
+            userSnap.docs.forEach(d => {
+                const data = d.data() as any
+                nameMap[d.id] = data.displayName || data.name || 'Unknown'
+            })
+
+            // Fetch all quizzes
+            const quizSnap = await getDocs(collection(db, 'quizzes'))
+
+            // Fetch all peer reviews
+            const reviewSnap = await getDocs(collection(db, 'reviews'))
+            const allReviews = reviewSnap.docs.map(d => ({ id: d.id, ...d.data() } as PeerReview))
+
+            const pending: PendingQuiz[] = []
+            const archived: PendingQuiz[] = []
+
+            quizSnap.docs.forEach(d => {
+                const data = d.data() as any
+                const quizReviews = allReviews.filter(r => r.quizId === d.id)
+                const peerApprovedCount = quizReviews.filter(r => r.overallVerdict === 'approved').length
+                const peerRejectedCount = quizReviews.filter(r => r.overallVerdict === 'rejected').length
+
+                const quiz: PendingQuiz = {
+                    id: d.id,
+                    title: data.title || '(Untitled)',
+                    createdBy: data.createdBy || '',
+                    contributorName: nameMap[data.createdBy] || 'Unknown Student',
+                    status: data.status || 'pending',
+                    createdAt: data.createdAt,
+                    questions: Array.isArray(data.questions) ? data.questions : [],
+                    peerReviews: quizReviews,
+                    peerApprovedCount,
+                    peerRejectedCount,
+                    teacherNote: data.teacherNote,
+                }
+
+                const readyForTeacher =
+                    (data.status === 'peer_approved' || quizReviews.length >= PEER_THRESHOLD) &&
+                    data.status !== 'teacher_approved' &&
+                    data.status !== 'rejected'
+
+                if (readyForTeacher) {
+                    pending.push(quiz)
+                } else if (data.status === 'teacher_approved' || data.status === 'rejected') {
+                    archived.push(quiz)
+                }
+            })
+
+            const byDate = (a: PendingQuiz, b: PendingQuiz) =>
+                (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0)
+
+            pending.sort(byDate)
+            archived.sort(byDate)
+
+            setPendingQuizzes(pending)
+            setArchivedQuizzes(archived)
+            setStats({
+                totalPending: pending.length,
+                totalApproved: archived.filter(q => q.status === 'teacher_approved').length,
+                totalRejected: archived.filter(q => q.status === 'rejected').length,
+                totalPeerReviewed: [...pending, ...archived].reduce((sum, q) => sum + q.peerReviews.length, 0),
+            })
+        } catch (err) {
+            console.error('Failed to load approvals:', err)
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    const openModal = (quiz: PendingQuiz) => {
+        setSelected(quiz)
+        setActiveTab('questions')
+        setTeacherNote('')
+    }
+
+    const closeModal = () => {
+        setSelected(null)
+        setTeacherNote('')
+    }
+
     const handleApprove = async () => {
-        if (!selectedEssay || !auth.currentUser) return
+        if (!selected || !auth.currentUser) return
         setApproving(true)
         try {
-            const essayRef = doc(db, 'essays', selectedEssay.id)
-            const studentSnap = await getDoc(doc(db, 'users', selectedEssay.studentId))
-            const classId = studentSnap.data()?.classId
-
-            let selectedPeers: string[] = []
-
-            if (classId) {
-                const usersSnapshot = await getDocs(query(collection(db, 'users')))
-                const potentialReviewers = usersSnapshot.docs
-                    .map(d => ({ id: d.id, ...d.data() }))
-                    .filter((user: any) => user.classId === classId && user.role === 'student' && user.id !== selectedEssay.studentId)
-                    .map((user: any) => user.id)
-
-                if (potentialReviewers.length > 0) {
-                    const shuffled = [...potentialReviewers].sort(() => Math.random() - 0.5)
-                    selectedPeers = shuffled.slice(0, Math.min(3, shuffled.length))
-                }
-            }
-
-            await updateDoc(essayRef, {
-                status: 'under_review',
-                approvedBy: auth.currentUser.uid,
-                approvedAt: serverTimestamp(),
-                peerReviewIds: selectedPeers,
-                requiresTeacherApproval: false,
+            await updateDoc(doc(db, 'quizzes', selected.id), {
+                status: 'teacher_approved',
+                teacherApprovedBy: auth.currentUser.uid,
+                teacherApprovedAt: serverTimestamp(),
+                teacherNote: teacherNote.trim() || null,
             })
 
             await addDoc(collection(db, 'messages'), {
                 fromId: 'system',
-                fromName: 'Teacher (Approval)',
-                recipients: [selectedEssay.studentId],
-                title: `Your essay "${selectedEssay.title}" was approved!`,
-                body: 'Your essay has been reviewed and APPROVED by your teacher! It has now been assigned to peers for review.',
+                fromName: 'Teacher (Quiz Review)',
+                recipients: [selected.createdBy],
+                title: `Your quiz "${selected.title}" has been approved! ✅`,
+                body: `Great work! Your quiz has been reviewed by your peers and approved by the teacher. It is now part of the class Question Pool.${teacherNote.trim() ? `\n\nTeacher note: ${teacherNote.trim()}` : ''}`,
                 createdAt: serverTimestamp(),
                 readBy: [],
                 type: 'system',
             })
 
-            setEssays(prev => prev.filter(e => e.id !== selectedEssay.id))
-            setArchivedEssays(prev => [{
-                ...selectedEssay,
-                status: 'under_review',
-                approvedBy: auth.currentUser!.uid,
+            setPendingQuizzes(prev => prev.filter(q => q.id !== selected.id))
+            setArchivedQuizzes(prev => [{
+                ...selected,
+                status: 'teacher_approved',
+                teacherNote: teacherNote.trim() || undefined,
             }, ...prev])
-            setSelectedEssay(null)
+            setStats(s => ({
+                ...s,
+                totalPending: s.totalPending - 1,
+                totalApproved: s.totalApproved + 1,
+            }))
+            closeModal()
         } catch (err) {
             console.error(err)
-            alert('Error approving essay. Check console.')
+            alert('Error approving quiz. Check console.')
         } finally {
             setApproving(false)
         }
     }
 
     const handleReject = async () => {
-        if (!selectedEssay || !auth.currentUser || !rejectReason.trim()) return
+        if (!selected || !auth.currentUser) return
+        if (!teacherNote.trim()) {
+            alert('Please write a note explaining why the quiz is being rejected.')
+            return
+        }
         setRejecting(true)
         try {
-            await updateDoc(doc(db, 'essays', selectedEssay.id), {
+            await updateDoc(doc(db, 'quizzes', selected.id), {
                 status: 'rejected',
                 rejectedBy: auth.currentUser.uid,
                 rejectedAt: serverTimestamp(),
-                rejectionReason: rejectReason,
+                teacherNote: teacherNote.trim(),
             })
 
             await addDoc(collection(db, 'messages'), {
                 fromId: 'system',
-                fromName: 'Teacher (Review)',
-                recipients: [selectedEssay.studentId],
-                title: `Your essay "${selectedEssay.title}" was not approved`,
-                body: `Your essay has been reviewed by your teacher and was NOT approved for peer review.\n\nReason: ${rejectReason}\n\nPlease check your My Essays tab, rewrite your essay from scratch using your own words, and submit it again.`,
+                fromName: 'Teacher (Quiz Review)',
+                recipients: [selected.createdBy],
+                title: `Your quiz "${selected.title}" needs revision`,
+                body: `Your quiz has been reviewed but was not approved at this stage.\n\nTeacher note: ${teacherNote.trim()}\n\nPlease update your quiz and resubmit it for peer review.`,
                 createdAt: serverTimestamp(),
                 readBy: [],
                 type: 'system',
             })
 
-            setEssays(prev => prev.filter(e => e.id !== selectedEssay.id))
-            setArchivedEssays(prev => [{
-                ...selectedEssay,
+            setPendingQuizzes(prev => prev.filter(q => q.id !== selected.id))
+            setArchivedQuizzes(prev => [{
+                ...selected,
                 status: 'rejected',
-                rejectedBy: auth.currentUser!.uid,
-                rejectionReason: rejectReason,
+                teacherNote: teacherNote.trim(),
             }, ...prev])
-            setSelectedEssay(null)
-            setRejectReason('')
+            setStats(s => ({
+                ...s,
+                totalPending: s.totalPending - 1,
+                totalRejected: s.totalRejected + 1,
+            }))
+            closeModal()
         } catch (err) {
             console.error(err)
-            alert('Error rejecting essay. Check console.')
+            alert('Error rejecting quiz. Check console.')
         } finally {
             setRejecting(false)
         }
     }
 
+    // ── Render ─────────────────────────────────────────────────────────────────
+
     return (
         <TeacherLayout title="Approvals">
-            <div className="p-4 sm:p-6 md:p-8 max-w-6xl mx-auto">
-                <div className="mb-6 md:mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                    <div>
-                        <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mb-1">
-                            Pending Approvals
-                        </h1>
-                        <p className="text-slate-500 text-sm">
-                            Essays flagged by the AI Detector awaiting your review
-                        </p>
-                    </div>
+            <div className="max-w-4xl mx-auto px-4 py-6">
+
+                {/* Header */}
+                <div className="mb-6">
+                    <h1 className="text-2xl font-bold text-slate-800">Quiz Approvals</h1>
+                    <p className="text-sm text-slate-500 mt-0.5">
+                        Quizzes appear here after {PEER_THRESHOLD} peer reviews. Your approval publishes them to the Question Pool.
+                    </p>
+                </div>
+
+                {/* Stats */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+                    {[
+                        { icon: '⏳', label: 'Awaiting You', value: stats.totalPending, color: 'text-amber-600' },
+                        { icon: '✅', label: 'Approved', value: stats.totalApproved, color: 'text-emerald-600' },
+                        { icon: '❌', label: 'Rejected', value: stats.totalRejected, color: 'text-red-500' },
+                        { icon: '👥', label: 'Peer Reviews Done', value: stats.totalPeerReviewed, color: 'text-blue-600' },
+                    ].map((s, i) => (
+                        <div key={i} className="bg-white rounded-xl border border-slate-200 px-4 py-3 flex flex-col items-center gap-1 shadow-sm text-center">
+                            <span className="text-xl">{s.icon}</span>
+                            <span className={`text-2xl font-bold ${s.color}`}>{s.value}</span>
+                            <span className="text-[10px] text-slate-400 font-semibold leading-tight">{s.label}</span>
+                        </div>
+                    ))}
                 </div>
 
                 {loading ? (
-                    <div className="flex justify-center p-12">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
-                    </div>
-                ) : essays.length === 0 ? (
-                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center text-slate-500">
-                        <span className="text-4xl mb-4 block">All caught up</span>
-                        <p className="font-medium text-slate-700">No essays are pending approval right now.</p>
+                    <div className="flex justify-center py-20">
+                        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-amber-500" />
                     </div>
                 ) : (
-                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-left text-sm whitespace-nowrap">
-                                <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 text-xs uppercase tracking-wider font-semibold">
-                                    <tr>
-                                        <th className="px-6 py-4">Student</th>
-                                        <th className="px-6 py-4">Essay Title</th>
-                                        <th className="px-6 py-4">Topic</th>
-                                        <th className="px-6 py-4">Submitted</th>
-                                        <th className="px-6 py-4 text-right">Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100">
-                                    {essays.map(essay => (
-                                        <tr key={essay.id} className="hover:bg-slate-50 transition-colors">
-                                            <td className="px-6 py-4 font-medium text-slate-900">
-                                                {essay.studentName}
-                                            </td>
-                                            <td className="px-6 py-4 max-w-[200px] truncate text-slate-700">
-                                                {essay.title}
-                                            </td>
-                                            <td className="px-6 py-4 text-slate-500">
-                                                {essay.topicName}
-                                            </td>
-                                            <td className="px-6 py-4 text-slate-500">
-                                                {essay.submittedAt?.toDate ? essay.submittedAt.toDate().toLocaleDateString() : 'Unknown'}
-                                            </td>
-                                            <td className="px-6 py-4 text-right">
-                                                <button
-                                                    onClick={() => setSelectedEssay(essay)}
-                                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-600 font-semibold rounded-lg hover:bg-blue-100 transition-colors"
-                                                >
-                                                    Review
-                                                </button>
-                                            </td>
-                                        </tr>
+                    <>
+                        {/* Pending */}
+                        <div className="mb-10">
+                            <div className="flex items-center gap-2 mb-4">
+                                <h2 className="text-base font-bold text-slate-700">Ready for Your Review</h2>
+                                {pendingQuizzes.length > 0 && (
+                                    <span className="bg-amber-100 text-amber-700 text-xs font-bold px-2 py-0.5 rounded-full">
+                                        {pendingQuizzes.length}
+                                    </span>
+                                )}
+                            </div>
+
+                            {pendingQuizzes.length === 0 ? (
+                                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm py-14 text-center">
+                                    <div className="text-5xl mb-3">🎉</div>
+                                    <p className="font-bold text-slate-700">All caught up!</p>
+                                    <p className="text-sm text-slate-400 mt-1">
+                                        No quizzes have reached {PEER_THRESHOLD} peer reviews yet.
+                                    </p>
+                                </div>
+                            ) : (
+                                <div className="space-y-3">
+                                    {pendingQuizzes.map(q => (
+                                        <QuizRow key={q.id} quiz={q} onReview={() => openModal(q)} />
                                     ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                )}
-
-                {!loading && archivedEssays.length > 0 && (
-                    <div className="mt-12">
-                        <div className="mb-4">
-                            <h2 className="text-xl font-bold text-slate-900 mb-1">
-                                Processed Archive
-                            </h2>
-                            <p className="text-slate-500 text-sm">
-                                Essays that you have already approved or rejected
-                            </p>
-                        </div>
-                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden opacity-75">
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-left text-sm whitespace-nowrap">
-                                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 text-xs uppercase tracking-wider font-semibold">
-                                        <tr>
-                                            <th className="px-6 py-4">Student</th>
-                                            <th className="px-6 py-4">Essay Title</th>
-                                            <th className="px-6 py-4">Status</th>
-                                            <th className="px-6 py-4">Submitted</th>
-                                            <th className="px-6 py-4 text-right">Action</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-slate-100">
-                                        {archivedEssays.map(essay => (
-                                            <tr key={essay.id} className="hover:bg-slate-50 transition-colors">
-                                                <td className="px-6 py-4 font-medium text-slate-900">
-                                                    {essay.studentName}
-                                                </td>
-                                                <td className="px-6 py-4 max-w-[200px] truncate text-slate-700">
-                                                    {essay.title}
-                                                </td>
-                                                <td className="px-6 py-4">
-                                                    {essay.status === 'rejected' ? (
-                                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-red-50 text-red-600 font-semibold text-xs rounded-full">
-                                                            Rejected
-                                                        </span>
-                                                    ) : (
-                                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-green-50 text-green-600 font-semibold text-xs rounded-full">
-                                                            Approved
-                                                        </span>
-                                                    )}
-                                                </td>
-                                                <td className="px-6 py-4 text-slate-500">
-                                                    {essay.submittedAt?.toDate ? essay.submittedAt.toDate().toLocaleDateString() : 'Unknown'}
-                                                </td>
-                                                <td className="px-6 py-4 text-right">
-                                                    <button
-                                                        onClick={() => setSelectedEssay(essay)}
-                                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 font-semibold rounded-lg hover:bg-slate-200 transition-colors"
-                                                    >
-                                                        View
-                                                    </button>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {selectedEssay && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-sm">
-                        <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col animate-fade-in relative">
-                            <div className="flex-shrink-0 px-6 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 rounded-t-2xl">
-                                <div>
-                                    <div className="flex items-center gap-2 mb-1">
-                                        <span className="text-xs font-bold uppercase tracking-wider text-amber-600 bg-amber-100 px-2.5 py-0.5 rounded-full">AI Flagged</span>
-                                        <span className="text-sm font-semibold text-slate-500">{selectedEssay.topicName}</span>
-                                    </div>
-                                    <h2 className="text-xl font-bold text-slate-900">{selectedEssay.title}</h2>
-                                    <p className="text-xs text-slate-500 mt-1">By {selectedEssay.studentName}</p>
                                 </div>
+                            )}
+                        </div>
+
+                        {/* Archive */}
+                        {archivedQuizzes.length > 0 && (
+                            <div>
+                                <h2 className="text-base font-bold text-slate-700 mb-4">Processed Archive</h2>
+                                <div className="space-y-3">
+                                    {archivedQuizzes.map(q => (
+                                        <QuizRow key={q.id} quiz={q} onReview={() => openModal(q)} archived />
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </>
+                )}
+            </div>
+
+            {/* ── Review Modal ──────────────────────────────────────────────────── */}
+            {selected && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+
+                        {/* Modal header */}
+                        <div className="px-6 py-4 border-b border-slate-200 flex items-start justify-between gap-4 bg-slate-50 rounded-t-2xl shrink-0">
+                            <div className="min-w-0">
+                                <h2 className="font-bold text-slate-800 text-lg truncate">{selected.title}</h2>
+                                <p className="text-xs text-slate-400 mt-0.5">
+                                    By {selected.contributorName}
+                                    <span className="mx-1.5">·</span>
+                                    {selected.questions.length} questions
+                                    <span className="mx-1.5">·</span>
+                                    {selected.peerReviews.length} peer review{selected.peerReviews.length !== 1 ? 's' : ''}
+                                    <span className="text-green-600 font-semibold ml-1">
+                                        ({selected.peerApprovedCount} approved)
+                                    </span>
+                                </p>
+                            </div>
+                            <button
+                                onClick={closeModal}
+                                className="text-slate-400 hover:text-slate-600 text-xl font-bold shrink-0 mt-0.5"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        {/* Tabs */}
+                        <div className="flex gap-1 p-3 border-b border-slate-200 bg-white shrink-0">
+                            {([
+                                { key: 'questions', label: `📋 Questions (${selected.questions.length})` },
+                                { key: 'peer_reviews', label: `👥 Peer Reviews (${selected.peerReviews.length})` },
+                            ] as const).map(tab => (
                                 <button
-                                    onClick={() => { setSelectedEssay(null); setRejectReason('') }}
-                                    className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-lg transition-colors"
+                                    key={tab.key}
+                                    onClick={() => setActiveTab(tab.key)}
+                                    className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${activeTab === tab.key
+                                        ? 'bg-slate-800 text-white'
+                                        : 'text-slate-500 hover:bg-slate-100'
+                                        }`}
                                 >
-                                    Close
+                                    {tab.label}
                                 </button>
-                            </div>
+                            ))}
+                        </div>
 
-                            <div className="flex-1 overflow-y-auto p-6 bg-slate-50 shadow-inner">
-                                <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm text-slate-800 text-sm md:text-base leading-relaxed whitespace-pre-wrap font-serif">
-                                    {selectedEssay.content}
-                                </div>
-                            </div>
+                        {/* Scrollable body */}
+                        <div className="flex-1 overflow-y-auto p-5">
 
-                            {selectedEssay.status === 'pending_teacher_approval' ? (
-                                <div className="px-6 pt-4 border-t border-slate-200 bg-white">
-                                    <label className="block text-sm font-semibold text-slate-700 mb-1">Reject Reason (Required if rejecting)</label>
-                                    <textarea
-                                        value={rejectReason}
-                                        onChange={e => setRejectReason(e.target.value)}
-                                        placeholder="Explain why this essay is being rejected (e.g., Please rewrite in your own words...)"
-                                        className="w-full text-sm border-slate-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500"
-                                        rows={2}
-                                    />
-                                </div>
-                            ) : selectedEssay.status === 'rejected' && selectedEssay.rejectionReason && (
-                                <div className="px-6 pt-4 border-t border-slate-200 bg-white">
-                                    <div className="bg-red-50 border border-red-100 rounded-lg p-4">
-                                        <h3 className="text-sm font-bold text-red-700 mb-1">Rejection Reason:</h3>
-                                        <p className="text-sm text-red-600">{selectedEssay.rejectionReason}</p>
-                                    </div>
+                            {activeTab === 'questions' && (
+                                <div className="space-y-4">
+                                    {selected.questions.map((q, qi) => {
+                                        const correctAnswer = q.answers.find(a => a.isCorrect)
+                                        let qApproved = 0
+                                        let qRejected = 0
+                                        selected.peerReviews.forEach(r => {
+                                            const qf = r.questionFeedback.find(f => f.questionId === q.id)
+                                            if (qf?.verdict === 'approved') qApproved++
+                                            if (qf?.verdict === 'rejected') qRejected++
+                                        })
+
+                                        return (
+                                            <div key={qi} className="bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden">
+                                                <div className="px-5 py-4">
+                                                    <div className="flex items-start gap-3 mb-3">
+                                                        <span className="text-sm font-bold text-slate-400 shrink-0 mt-0.5">Q{qi + 1}</span>
+                                                        <div className="flex-1 min-w-0">
+                                                            {q.topicName && (
+                                                                <span className="inline-flex items-center text-[10px] font-semibold bg-purple-50 text-purple-600 border border-purple-100 px-2 py-0.5 rounded-full mb-2">
+                                                                    📚 {q.topicName}{q.subtopic ? ` › ${q.subtopic}` : ''}
+                                                                </span>
+                                                            )}
+                                                            <p className="text-sm font-semibold text-slate-800 leading-relaxed">
+                                                                {q.text || '(No question text)'}
+                                                            </p>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Peer vote tally per question */}
+                                                    {selected.peerReviews.length > 0 && (
+                                                        <div className="flex items-center gap-3 mb-3 ml-7">
+                                                            <span className="text-xs text-green-600 font-bold">👍 {qApproved}</span>
+                                                            <span className="text-xs text-red-400 font-bold">👎 {qRejected}</span>
+                                                            <div className="flex-1 max-w-[100px] bg-slate-200 rounded-full h-1.5 overflow-hidden">
+                                                                <div
+                                                                    className="h-1.5 rounded-full bg-green-400"
+                                                                    style={{
+                                                                        width: `${selected.peerReviews.length > 0
+                                                                            ? Math.round((qApproved / selected.peerReviews.length) * 100)
+                                                                            : 0}%`
+                                                                    }}
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {/* Answers */}
+                                                    <div className="space-y-1.5 ml-7">
+                                                        {q.answers.filter(a => a.text.trim()).map((a, ai) => (
+                                                            <div
+                                                                key={ai}
+                                                                className={`flex items-start gap-2 text-xs px-3 py-2 rounded-lg ${a.isCorrect
+                                                                    ? 'bg-green-50 border border-green-200 text-green-800 font-semibold'
+                                                                    : 'bg-white border border-slate-200 text-slate-600'
+                                                                    }`}
+                                                            >
+                                                                <span className="font-bold shrink-0">
+                                                                    {String.fromCharCode(65 + ai)}.
+                                                                </span>
+                                                                <span className="flex-1">{a.text}</span>
+                                                                {a.isCorrect && (
+                                                                    <span className="text-green-600 shrink-0">✓ Correct</span>
+                                                                )}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+
+                                                    {/* Explanation */}
+                                                    {correctAnswer?.explanation && (
+                                                        <div className="mt-2 ml-7 text-xs text-slate-500 bg-white rounded-lg px-3 py-2 border border-slate-100">
+                                                            💬 {correctAnswer.explanation}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
                                 </div>
                             )}
 
-                            <div className="p-6 bg-white rounded-b-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
-                                <button
-                                    onClick={() => { setSelectedEssay(null); setRejectReason('') }}
-                                    className="px-4 py-2 font-semibold text-slate-500 hover:bg-slate-100 rounded-lg transition-colors order-3 sm:order-1"
-                                >
-                                    {selectedEssay.status === 'pending_teacher_approval' ? 'Cancel' : 'Close'}
-                                </button>
+                            {activeTab === 'peer_reviews' && (
+                                <PeerReviewSummary
+                                    reviews={selected.peerReviews}
+                                    questions={selected.questions}
+                                />
+                            )}
+                        </div>
 
-                                {selectedEssay.status === 'pending_teacher_approval' && (
-                                    <div className="flex gap-3 w-full sm:w-auto order-1 sm:order-2">
+                        {/* Modal footer */}
+                        <div className="border-t border-slate-200 bg-white rounded-b-2xl p-5 shrink-0">
+                            {selected.status !== 'teacher_approved' && selected.status !== 'rejected' ? (
+                                <>
+                                    <div className="mb-3">
+                                        <label className="text-xs font-semibold text-slate-600 block mb-1.5">
+                                            📝 Note to student
+                                            <span className="ml-1 font-normal text-slate-400">
+                                                (required if rejecting, optional if approving)
+                                            </span>
+                                        </label>
+                                        <textarea
+                                            value={teacherNote}
+                                            onChange={e => setTeacherNote(e.target.value)}
+                                            placeholder="e.g. Great work! / Please rewrite Q3 — the correct answer is ambiguous."
+                                            rows={2}
+                                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none"
+                                        />
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <button
+                                            onClick={closeModal}
+                                            className="px-4 py-2.5 text-sm font-semibold text-slate-500 hover:bg-slate-100 rounded-xl transition-colors"
+                                        >
+                                            Cancel
+                                        </button>
                                         <button
                                             onClick={handleReject}
-                                            disabled={rejecting || approving || !rejectReason.trim()}
-                                            className="flex-1 sm:flex-none px-6 py-2.5 bg-red-100 text-red-700 font-bold rounded-xl hover:bg-red-200 transition-colors disabled:opacity-50"
+                                            disabled={rejecting || approving}
+                                            className="flex-1 sm:flex-none px-6 py-2.5 bg-red-100 text-red-700 font-bold rounded-xl hover:bg-red-200 transition-colors disabled:opacity-50 text-sm"
                                         >
-                                            {rejecting ? 'Rejecting...' : 'Reject Essay'}
+                                            {rejecting ? '⏳ Rejecting…' : '❌ Reject'}
                                         </button>
                                         <button
                                             onClick={handleApprove}
-                                            disabled={rejecting || approving}
-                                            className="flex-1 sm:flex-none px-6 py-2.5 bg-green-600 text-white font-bold rounded-xl hover:bg-green-700 shadow-md shadow-green-500/20 transition-all disabled:opacity-50"
+                                            disabled={approving || rejecting}
+                                            className="flex-1 sm:flex-none px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-sm transition-all disabled:opacity-50 text-sm flex items-center justify-center gap-2"
                                         >
-                                            {approving ? 'Approving...' : 'Approve & Assign'}
+                                            {approving
+                                                ? <><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> Approving…</>
+                                                : '✅ Approve & Publish'
+                                            }
                                         </button>
                                     </div>
-                                )}
-                            </div>
+                                </>
+                            ) : (
+                                <div className="flex items-center justify-between">
+                                    {selected.status === 'teacher_approved' ? (
+                                        <span className="text-sm font-semibold text-emerald-600">
+                                            ✅ Approved and published to the Question Pool.
+                                        </span>
+                                    ) : (
+                                        <div>
+                                            <span className="text-sm font-semibold text-red-600">❌ Rejected.</span>
+                                            {selected.teacherNote && (
+                                                <p className="text-xs text-slate-500 mt-0.5">Note: {selected.teacherNote}</p>
+                                            )}
+                                        </div>
+                                    )}
+                                    <button
+                                        onClick={closeModal}
+                                        className="px-4 py-2 text-sm font-semibold text-slate-500 hover:bg-slate-100 rounded-xl transition-colors"
+                                    >
+                                        Close
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     </div>
-                )}
-            </div>
+                </div>
+            )}
         </TeacherLayout>
     )
 }

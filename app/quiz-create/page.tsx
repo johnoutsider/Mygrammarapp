@@ -145,7 +145,8 @@ function QuizCreatorInner() {
             } catch (e) { console.error(e); }
         };
         load();
-    }, [searchParams]);
+    }, [searchParams, editId, topics]);
+
 
     const current = questions[activeIdx];
     const selectedTopic = topics.find(t => t.id === current.topicId);
@@ -349,9 +350,9 @@ function QuizCreatorInner() {
                             {/* Per-question status label */}
                             {editId && quizStatus && (
                                 <span className={`inline-block mt-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full ${quizStatus === 'teacher_approved' ? 'bg-green-500/30 text-green-200' :
-                                        quizStatus === 'rejected' ? 'bg-red-500/30 text-red-200' :
-                                            quizStatus === 'peer_approved' ? 'bg-blue-500/30 text-blue-200' :
-                                                'bg-yellow-500/20 text-yellow-200'
+                                    quizStatus === 'rejected' ? 'bg-red-500/30 text-red-200' :
+                                        quizStatus === 'peer_approved' ? 'bg-blue-500/30 text-blue-200' :
+                                            'bg-yellow-500/20 text-yellow-200'
                                     }`}>
                                     {STATUS_CONFIG[quizStatus].icon} {STATUS_CONFIG[quizStatus].label}
                                 </span>
