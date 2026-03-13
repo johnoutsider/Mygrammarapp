@@ -8,10 +8,15 @@ import { onActiveGame, submitAnswer } from '@/lib/gameService'
 import type { ActiveGame } from '@/lib/gameService'
 
 const SHAPES = [
-    { bg: 'bg-red-500', hover: 'hover:bg-red-400', shape: '▲', label: 'A' },
-    { bg: 'bg-blue-600', hover: 'hover:bg-blue-500', shape: '◆', label: 'B' },
-    { bg: 'bg-yellow-400', hover: 'hover:bg-yellow-300', shape: '●', label: 'C' },
-    { bg: 'bg-green-600', hover: 'hover:bg-green-500', shape: '■', label: 'D' },
+    { bg: 'bg-red-500', hover: 'hover:bg-red-400', shape: '▲' },
+    { bg: 'bg-blue-600', hover: 'hover:bg-blue-500', shape: '◆' },
+    { bg: 'bg-yellow-400', hover: 'hover:bg-yellow-300', shape: '●' },
+    { bg: 'bg-green-600', hover: 'hover:bg-green-500', shape: '■' },
+]
+
+const TF_SHAPES = [
+    { bg: 'bg-blue-500', hover: 'hover:bg-blue-400', shape: '✓' },
+    { bg: 'bg-red-500', hover: 'hover:bg-red-400', shape: '✗' },
 ]
 
 export default function PlayGame() {
@@ -19,12 +24,12 @@ export default function PlayGame() {
     const [game, setGame] = useState<ActiveGame | null>(null)
     const [currentUser, setCurrentUser] = useState<any>(null)
     const [answered, setAnswered] = useState(false)
-    const [selectedId, setSelectedId] = useState<number | null>(null)
     const [pointsEarned, setPointsEarned] = useState<number | null>(null)
     const [timeLeft, setTimeLeft] = useState<number>(20)
     const [quizQuestions, setQuizQuestions] = useState<any[]>([])
+    const [questionsLoaded, setQuestionsLoaded] = useState(false)
     const timerRef = useRef<NodeJS.Timeout | null>(null)
-    const questionStartRef = useRef<number>(Date.now())
+    const prevQuestionRef = useRef<number>(-1)
 
     // Auth
     useEffect(() => {
@@ -35,76 +40,76 @@ export default function PlayGame() {
         return unsub
     }, [router])
 
-    // Load quiz questions from Firestore
+    // Load quiz questions — reload whenever quizId changes
     useEffect(() => {
         if (!game?.quizId) return
+        setQuestionsLoaded(false)
         const loadQuiz = async () => {
             const { db } = await import('@/lib/firebase')
             const { doc, getDoc } = await import('firebase/firestore')
             const snap = await getDoc(doc(db, 'quizzes', game.quizId))
             if (snap.exists()) {
                 setQuizQuestions(snap.data().questions || [])
+                setQuestionsLoaded(true)
             }
         }
         loadQuiz()
     }, [game?.quizId])
 
     // Listen to game state
+    // Listen to game state
     useEffect(() => {
         const unsub = onActiveGame((g) => {
             setGame(g)
+            if (!g || g.status === 'ended') { router.push('/dashboard'); return }
 
-            if (!g || g.status === 'ended') {
-                router.push('/dashboard')
-                return
-            }
-
-            // New question started — reset answered state
+            // Only reset answered when question index actually changes
             if (g.status === 'question') {
-                setAnswered(false)
-                setSelectedId(null)
-                setPointsEarned(null)
-                questionStartRef.current = g.questionStartedAt || Date.now()
+                if (g.currentQuestion !== prevQuestionRef.current) {
+                    prevQuestionRef.current = g.currentQuestion
+                    setAnswered(false)
+                    setPointsEarned(null)
+                }
             }
         })
         return unsub
     }, [router])
 
-    // Countdown timer
+    // Synced timer — derived from RTDB questionStartedAt
     useEffect(() => {
-        if (!game || game.status !== 'question' || answered) return
+        if (!game || game.status !== 'question' || answered || !questionsLoaded) {
+            if (timerRef.current) clearInterval(timerRef.current)
+            return
+        }
 
         const currentQ = quizQuestions[game.currentQuestion]
         const timeLimitSec = currentQ?.timeLimit || 20
-        setTimeLeft(timeLimitSec)
+        const startedAt = game.questionStartedAt || Date.now()
 
+        const tick = () => {
+            const elapsed = Math.floor((Date.now() - startedAt) / 1000)
+            const remaining = Math.max(0, timeLimitSec - elapsed)
+            setTimeLeft(remaining)
+            if (remaining === 0 && timerRef.current) clearInterval(timerRef.current)
+        }
+
+        tick()
         if (timerRef.current) clearInterval(timerRef.current)
-
-        timerRef.current = setInterval(() => {
-            setTimeLeft(prev => {
-                if (prev <= 1) {
-                    clearInterval(timerRef.current!)
-                    return 0
-                }
-                return prev - 1
-            })
-        }, 1000)
+        timerRef.current = setInterval(tick, 500)
 
         return () => { if (timerRef.current) clearInterval(timerRef.current) }
-    }, [game?.currentQuestion, game?.status, answered])
+    }, [game?.currentQuestion, game?.status, game?.questionStartedAt, answered, questionsLoaded, quizQuestions])
 
     const handleAnswer = async (answerId: number) => {
-        if (answered || !currentUser || !game || game.status !== 'question') return
-
+        if (answered || !currentUser || !game || game.status !== 'question' || timeLeft === 0) return
         if (timerRef.current) clearInterval(timerRef.current)
 
         const currentQ = quizQuestions[game.currentQuestion]
         const timeLimitMs = (currentQ?.timeLimit || 20) * 1000
-        const timeMs = Date.now() - questionStartRef.current
+        const timeMs = Date.now() - (game.questionStartedAt || Date.now())
         const isCorrect = currentQ?.answers?.find((a: any) => a.id === answerId)?.isCorrect || false
 
         setAnswered(true)
-        setSelectedId(answerId)
 
         const pts = await submitAnswer(
             currentUser.uid,
@@ -117,7 +122,7 @@ export default function PlayGame() {
         setPointsEarned(pts)
     }
 
-    // ── Waiting for game to start ──
+    // ── Lobby ──
     if (!game || game.status === 'lobby') {
         return (
             <div className="min-h-screen bg-indigo-900 flex items-center justify-center">
@@ -126,7 +131,7 @@ export default function PlayGame() {
         )
     }
 
-    // ── Leaderboard screen ──
+    // ── Leaderboard ──
     if (game.status === 'leaderboard') {
         const sorted = Object.entries(game.players || {})
             .map(([uid, p]: any) => ({ uid, ...p }))
@@ -140,10 +145,10 @@ export default function PlayGame() {
                     {sorted.map((p, i) => (
                         <div key={p.uid}
                             className={`flex items-center justify-between px-5 py-3 rounded-xl font-bold text-white
-                            ${i === 0 ? 'bg-yellow-500 text-yellow-900 text-lg' :
-                                    i === 1 ? 'bg-slate-400' :
+                            ${i === 0 ? 'bg-yellow-500 text-yellow-900' :
+                                    i === 1 ? 'bg-slate-400 text-slate-900' :
                                         i === 2 ? 'bg-amber-700' : 'bg-white/10'}`}>
-                            <span>{i + 1}. {p.name}</span>
+                            <span>{i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`} {p.name}</span>
                             <span>{p.score} pts</span>
                         </div>
                     ))}
@@ -157,10 +162,9 @@ export default function PlayGame() {
     if (game.status === 'ended') {
         const sorted = Object.entries(game.players || {})
             .map(([uid, p]: any) => ({ uid, ...p }))
-            .sort((a, b) => b.score - a.score)
-
-        const myRank = sorted.findIndex(p => p.uid === currentUser?.uid) + 1
-        const myScore = game.players?.[currentUser?.uid]?.score || 0
+            .sort((a: any, b: any) => b.score - a.score)
+        const myRank = sorted.findIndex(([uid]: any) => uid === currentUser?.uid) + 1
+        const myScore = (game.players as any)?.[currentUser?.uid]?.score || 0
 
         return (
             <div className="min-h-screen bg-gradient-to-br from-indigo-900 to-violet-900 flex flex-col items-center justify-center p-6 text-white text-center">
@@ -168,10 +172,10 @@ export default function PlayGame() {
                 <h2 className="text-3xl font-extrabold mb-2">Game Over!</h2>
                 <p className="text-violet-300 mb-6">You finished #{myRank} with {myScore} points</p>
                 <div className="w-full max-w-sm space-y-3 mb-8">
-                    {sorted.slice(0, 5).map((p, i) => (
-                        <div key={p.uid}
+                    {sorted.slice(0, 5).map(([uid, p]: any, i) => (
+                        <div key={uid}
                             className={`flex items-center justify-between px-5 py-3 rounded-xl font-bold
-                            ${p.uid === currentUser?.uid ? 'bg-violet-500 ring-2 ring-white' :
+                            ${uid === currentUser?.uid ? 'bg-violet-500 ring-2 ring-white' :
                                     i === 0 ? 'bg-yellow-500 text-yellow-900' : 'bg-white/10'}`}>
                             <span>{i + 1}. {p.name}</span>
                             <span>{p.score} pts</span>
@@ -188,85 +192,138 @@ export default function PlayGame() {
         )
     }
 
-    // ── Active question — shapes only ──
+    // ── Loading questions ──
+    if (!questionsLoaded) {
+        return (
+            <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+                <div className="text-center">
+                    <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-white mx-auto mb-3" />
+                    <p className="text-white/60 text-sm">Loading question...</p>
+                </div>
+            </div>
+        )
+    }
+
     const currentQ = quizQuestions[game.currentQuestion]
     const timeLimitSec = currentQ?.timeLimit || 20
     const timerPct = (timeLeft / timeLimitSec) * 100
-    const answers = currentQ?.type === 'true_or_false'
-        ? [{ id: 1, isCorrect: false }, { id: 2, isCorrect: false }]
-        : [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }]
+    const isTF = currentQ?.type === 'true_or_false'
+    const answers = currentQ?.answers || []
+    const styles = isTF ? TF_SHAPES : SHAPES
 
+    // ── Answered — full blocking screen ──
+    if (answered) {
+        return (
+            <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-center">
+
+                {/* Result circle */}
+                <div className={`w-28 h-28 rounded-full flex items-center justify-center text-6xl mb-5 shadow-xl
+                    ${pointsEarned && pointsEarned > 0 ? 'bg-green-500' : 'bg-red-500'}`}>
+                    {pointsEarned && pointsEarned > 0 ? '✓' : '✗'}
+                </div>
+
+                <h2 className={`text-4xl font-extrabold mb-2
+                    ${pointsEarned && pointsEarned > 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    {pointsEarned && pointsEarned > 0 ? 'Correct!' : 'Wrong!'}
+                </h2>
+
+                {pointsEarned && pointsEarned > 0 ? (
+                    <p className="text-white text-2xl font-bold mb-1">+{pointsEarned} points</p>
+                ) : (
+                    <p className="text-slate-400 text-base mb-1">Better luck next time!</p>
+                )}
+
+                <p className="text-slate-400 text-sm mb-10">
+                    Total score: {(game.players as any)?.[currentUser?.uid]?.score || 0} pts
+                </p>
+
+                {/* Accepted banner */}
+                <div className="bg-violet-900/60 border border-violet-500/40 rounded-2xl px-6 py-5 mb-4 w-full max-w-xs">
+                    <p className="text-violet-200 font-bold text-lg mb-1">✅ Answer Accepted</p>
+                    <p className="text-violet-400 text-sm">Your response has been recorded</p>
+                </div>
+
+                {/* Waiting pulse */}
+                <div className="flex items-center gap-3 mt-2">
+                    <span className="relative flex h-2.5 w-2.5">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
+                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-violet-500" />
+                    </span>
+                    <span className="text-violet-400 text-sm">Waiting for next question...</span>
+                </div>
+            </div>
+        )
+    }
+
+    // ── Active question ──
     return (
         <div className="min-h-screen bg-slate-900 flex flex-col">
 
             {/* Top bar */}
-            <div className="px-4 pt-6 pb-2 flex items-center justify-between">
-                <span className="text-white/60 text-sm font-medium">
-                    Q {game.currentQuestion + 1} / {game.totalQuestions}
+            <div className="px-4 pt-5 pb-2 flex items-center justify-between">
+                <span className="text-white/60 text-xs font-medium">
+                    Q {game.currentQuestion + 1}/{game.totalQuestions}
                 </span>
-                <div className={`text-2xl font-extrabold ${timeLeft <= 5 ? 'text-red-400 animate-pulse' : 'text-white'}`}>
+                <div className={`text-xl font-extrabold px-3 py-1 rounded-lg
+                    ${timeLeft <= 5 ? 'bg-red-500 text-white animate-pulse' :
+                        timeLeft <= 10 ? 'bg-yellow-400 text-yellow-900' : 'bg-white/10 text-white'}`}>
                     {timeLeft}s
                 </div>
-                <span className="text-white/60 text-sm font-medium">
-                    {game.players?.[currentUser?.uid]?.score || 0} pts
+                <span className="text-white/60 text-xs font-medium">
+                    {(game.players as any)?.[currentUser?.uid]?.score || 0} pts
                 </span>
             </div>
 
             {/* Timer bar */}
-            <div className="h-2 bg-white/10 mx-4 rounded-full overflow-hidden">
+            <div className="h-1.5 bg-white/10 mx-4 rounded-full overflow-hidden mt-1">
                 <div
-                    className={`h-full rounded-full transition-all duration-1000 ${timerPct > 50 ? 'bg-green-400' :
-                            timerPct > 25 ? 'bg-yellow-400' : 'bg-red-400'
+                    className={`h-full rounded-full transition-all duration-500 ${timerPct > 50 ? 'bg-green-400' :
+                        timerPct > 25 ? 'bg-yellow-400' : 'bg-red-400'
                         }`}
                     style={{ width: `${timerPct}%` }}
                 />
             </div>
 
-            {/* Answer result feedback */}
-            {answered && (
-                <div className={`mx-4 mt-4 rounded-xl p-4 text-center font-bold text-lg
-                    ${pointsEarned && pointsEarned > 0 ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}>
-                    {pointsEarned && pointsEarned > 0
-                        ? `✅ +${pointsEarned} points!`
-                        : '❌ Wrong answer'}
+            {/* Question text */}
+            <div className="px-4 pt-4 pb-3 flex items-center justify-center">
+                <h2 className="text-lg font-bold text-white text-center leading-snug max-w-sm">
+                    {currentQ?.text || ''}
+                </h2>
+            </div>
+
+            {/* Time up */}
+            {timeLeft === 0 && (
+                <div className="mx-4 mb-2 bg-orange-500/20 text-orange-300 rounded-xl p-2 text-center font-semibold text-sm">
+                    ⏰ Time&apos;s up!
                 </div>
             )}
 
-            {/* Shapes grid */}
-            <div className="flex-1 grid grid-cols-2 gap-4 p-4 mt-2">
-                {answers.map((ans, i) => {
-                    const style = SHAPES[i]
-                    const isSelected = selectedId === ans.id
-                    const dimmed = answered && !isSelected
-
+            {/* Answer buttons — shape + text */}
+            <div className="flex-1 grid grid-cols-2 gap-3 p-3 pb-6">
+                {answers.map((ans: any, i: number) => {
+                    const style = styles[i] || SHAPES[i]
                     return (
                         <button
                             key={ans.id}
                             onClick={() => handleAnswer(ans.id)}
-                            disabled={answered || timeLeft === 0}
+                            disabled={timeLeft === 0}
                             className={`
-                                ${style.bg} ${!answered ? style.hover : ''}
-                                rounded-2xl flex flex-col items-center justify-center
+                                ${style.bg} ${timeLeft > 0 ? style.hover : 'opacity-50'}
+                                rounded-2xl flex flex-col items-center justify-center gap-2
                                 text-white font-bold shadow-lg
-                                transition-all duration-150
-                                ${isSelected ? 'ring-4 ring-white scale-95' : ''}
-                                ${dimmed ? 'opacity-30' : ''}
-                                ${answered ? 'cursor-default' : 'active:scale-95'}
-                                min-h-[140px]
+                                transition-all duration-150 active:scale-95
+                                min-h-[110px] px-3 py-4
+                                disabled:cursor-not-allowed
                             `}
                         >
-                            <span className="text-5xl mb-2">{style.shape}</span>
+                            <span className="text-2xl">{style.shape}</span>
+                            <span className="text-sm font-semibold text-center leading-tight px-1">
+                                {ans.text}
+                            </span>
                         </button>
                     )
                 })}
             </div>
-
-            {/* Time up message */}
-            {timeLeft === 0 && !answered && (
-                <div className="mx-4 mb-4 bg-orange-500/20 text-orange-300 rounded-xl p-3 text-center font-semibold">
-                    ⏰ Time&apos;s up!
-                </div>
-            )}
         </div>
     )
 }

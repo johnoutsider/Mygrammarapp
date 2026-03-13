@@ -75,19 +75,26 @@ export async function submitAnswer(
     timeMs: number,
     timeLimitMs: number
 ) {
-    const points = correct ? Math.round(1000 * (1 - timeMs / timeLimitMs / 2)) : 0
+    const points = correct ? Math.round(1000 * (1 - (timeMs / timeLimitMs) * 0.5)) : 0
+
+    // Get current score first
+    const snap = await get(ref(rtdb, `activeGame/players/${uid}/score`))
+    const currentScore = snap.val() || 0
+
     await update(ref(rtdb), {
         [`activeGame/players/${uid}/answered`]: true,
-        [`activeGame/players/${uid}/score`]: null, // will increment below
-        [`activeGame/answers/${uid}`]: { questionIndex, answerId, correct, timeMs, points }
+        [`activeGame/players/${uid}/score`]: currentScore + points,
+        [`activeGame/answers/${uid}`]: {
+            questionIndex,
+            answerId,
+            correct,
+            timeMs,
+            points
+        }
     })
-    // Increment score
-    const snap = await get(ref(rtdb, `activeGame/players/${uid}/score`))
-    const current = snap.val() || 0
-    await set(ref(rtdb, `activeGame/players/${uid}/score`), current + points)
+
     return points
 }
-
 // Teacher: show leaderboard between questions
 export async function showLeaderboard() {
     await update(ref(rtdb, 'activeGame'), { status: 'leaderboard' })

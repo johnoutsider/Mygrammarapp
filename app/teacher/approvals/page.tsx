@@ -11,7 +11,7 @@ import { onAuthStateChanged } from 'firebase/auth'
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 
-const PEER_THRESHOLD = 3 // number of peer reviews before a quiz escalates to teacher
+const PEER_THRESHOLD = 1 // number of peer reviews before a quiz escalates to teacher
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
