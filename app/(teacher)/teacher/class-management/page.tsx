@@ -278,19 +278,19 @@ export default function ClassManagementPage() {
                             <input
                                 type="text" placeholder="Search students..."
                                 value={search} onChange={e => setSearch(e.target.value)}
-                                className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1a9aaa]/30"
+                                className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#1a9aaa]/30"
                             />
                         </div>
 
                         <select value={filterGroup} onChange={e => setFilterGroup(e.target.value)}
-                            className="text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#1a9aaa]/30 text-slate-600">
+                            className="text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none bg-white focus:ring-2 focus:ring-[#1a9aaa]/30 text-slate-600">
                             <option value="all">All Groups</option>
                             <option value="unassigned">Unassigned</option>
                             {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
                         </select>
 
                         <select value={filterAccess} onChange={e => setFilterAccess(e.target.value as FilterAccess)}
-                            className="text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#1a9aaa]/30 text-slate-600">
+                            className="text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none bg-white focus:ring-2 focus:ring-[#1a9aaa]/30 text-slate-600">
                             <option value="all">All Access</option>
                             <option value="both">Both</option>
                             <option value="writing">Writing</option>
@@ -309,7 +309,7 @@ export default function ClassManagementPage() {
                         <div className="overflow-x-auto">
                             <table className="w-full">
                                 <thead>
-                                    <tr className="text-left text-xs font-semibold text-slate-400 uppercase tracking-wider bg-slate-50">
+                                    <tr className="text-left text-xs font-semibold text-slate-400  uppercase tracking-wider bg-slate-50">
                                         <th className="px-5 py-3">Name</th>
                                         <th className="px-5 py-3">Group</th>
                                         <th className="px-5 py-3">Access</th>
@@ -325,7 +325,7 @@ export default function ClassManagementPage() {
                                         return (
                                             <tr key={student.uid}
                                                 className={`transition-colors hover:bg-slate-50/70
-                                                    ${isUnassigned ? 'bg-amber-50/40' : ''}`}>
+                                                    ${isUnassigned ? 'bg-white' : ''}`}>
 
                                                 {/* Name */}
                                                 <td className="px-5 py-3.5">
@@ -350,7 +350,7 @@ export default function ClassManagementPage() {
                                                             value={student.groupId || ''}
                                                             onChange={e => handleAssignGroup(student.uid, name, e.target.value)}
                                                             disabled={isSaving}
-                                                            className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 pr-7 focus:outline-none focus:ring-2 focus:ring-[#1a9aaa]/30 text-slate-700 disabled:opacity-60 appearance-auto"
+                                                            className="text-sm border border-slate-200 bg-white rounded-lg px-3 py-1.5 pr-7 focus:outline-none focus:ring-2 focus:ring-[#1a9aaa]/30 text-slate-700 disabled:opacity-60 appearance-auto"
                                                         >
                                                             <option value="">— Unassigned</option>
                                                             {groups.map(g => (
