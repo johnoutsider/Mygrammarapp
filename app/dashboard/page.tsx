@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { auth, db } from '@/lib/firebase'
 import { onAuthStateChanged } from 'firebase/auth'
-import { collection, query, where, getDocs } from 'firebase/firestore'
+import { collection, query, where, getDocs, orderBy } from 'firebase/firestore'
 import StudentLayout from '@/components/StudentLayout'
 import IELTSRubric from '@/components/IELTSRubric'
 import { onActiveGame, joinGame } from '@/lib/gameService'
@@ -16,6 +16,7 @@ export default function Dashboard() {
     const [activeGame, setActiveGame] = useState<ActiveGame | null>(null)
     const [currentUser, setCurrentUser] = useState<any>(null)
     const [loading, setLoading] = useState(true)
+    const [pastReports, setPastReports] = useState<any[]>([])
     const [stats, setStats] = useState({
         submittedEssays: 0,
         reviewsCompleted: 0,
@@ -60,6 +61,17 @@ export default function Dashboard() {
                     reviewsCompleted: reviewsSnapshot.size,
                     reviewsPending: assignedSnapshot.size - reviewsSnapshot.size,
                 })
+
+                // Fetch past game reports
+                const reportsSnap = await getDocs(
+                    query(collection(db, 'gameReports'), orderBy('playedAt', 'desc'))
+                )
+                const myReports = reportsSnap.docs
+                    .filter(d => d.data().players?.[user.uid])
+                    .slice(0, 5)
+                    .map(d => ({ id: d.id, ...d.data() }))
+                setPastReports(myReports)
+
             } catch (error) {
                 console.error('Error fetching stats:', error)
             }
@@ -69,9 +81,9 @@ export default function Dashboard() {
         })
 
         return () => unsubscribe()
-    }, [router])                   // ← first useEffect closes here
+    }, [router])
 
-    useEffect(() => {              // ✅ separate, top-level useEffect
+    useEffect(() => {
         const unsub = onActiveGame(setActiveGame)
         return unsub
     }, [])
@@ -82,6 +94,7 @@ export default function Dashboard() {
         await joinGame(currentUser.uid, profile?.name || currentUser.displayName || 'Student')
         router.push('/play')
     }
+
     if (loading) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -97,6 +110,8 @@ export default function Dashboard() {
                     <h1 className="text-4xl font-bold text-slate-900 mb-2">Welcome Back!</h1>
                     <p className="text-slate-500">Here&apos;s your writing progress</p>
                 </div>
+
+                {/* Game banner */}
                 {activeGame && activeGame.status === 'lobby' && (
                     <div className="mb-6 rounded-2xl bg-gradient-to-r from-violet-600 to-indigo-600 p-5 text-white shadow-lg flex items-center justify-between">
                         <div>
@@ -137,7 +152,7 @@ export default function Dashboard() {
                 </div>
 
                 {/* Quick Actions */}
-                <div className="bg-white backdrop-blur-sm rounded-xl p-6 border border-slate-200 shadow-sm">
+                <div className="bg-white backdrop-blur-sm rounded-xl p-6 border border-slate-200 shadow-sm mb-8">
                     <h2 className="text-2xl font-semibold text-slate-900 mb-4">Quick Actions</h2>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -178,6 +193,42 @@ export default function Dashboard() {
                         </Link>
                     </div>
                 </div>
+
+                {/* Recent Games */}
+                {pastReports.length > 0 && (
+                    <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+                        <h2 className="text-2xl font-semibold text-slate-900 mb-4">🎮 Recent Games</h2>
+                        <div className="space-y-2">
+                            {pastReports.map((r: any) => {
+                                const me = r.players[currentUser?.uid]
+                                return (
+                                    <div
+                                        key={r.id}
+                                        onClick={() => router.push(`/play/report/${r.id}`)}
+                                        className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 flex items-center justify-between hover:border-violet-300 hover:shadow-sm cursor-pointer transition-all"
+                                    >
+                                        <div>
+                                            <p className="font-semibold text-slate-800">{r.quizTitle}</p>
+                                            <p className="text-xs text-slate-400 mt-0.5">
+                                                {new Date(r.playedAt).toLocaleDateString('en-GB', {
+                                                    day: 'numeric', month: 'short', year: 'numeric'
+                                                })}
+                                            </p>
+                                        </div>
+                                        <div className="flex items-center gap-4 text-right">
+                                            <div>
+                                                <p className="font-bold text-violet-600">{me?.score || 0} pts</p>
+                                                <p className="text-xs text-slate-400">Rank #{me?.rank}</p>
+                                            </div>
+                                            <span className="text-slate-300 text-lg">→</span>
+                                        </div>
+                                    </div>
+                                )
+                            })}
+                        </div>
+                    </div>
+                )}
+
             </main>
 
             <IELTSRubric />

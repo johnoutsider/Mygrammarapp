@@ -6,6 +6,7 @@ import { auth, db } from '@/lib/firebase'
 import { useAuthState } from 'react-firebase-hooks/auth'
 import { useEffect, useState } from 'react'
 import { Gamepad2 } from 'lucide-react'
+import { BarChart2 } from 'lucide-react'
 
 interface TeacherLayoutProps {
     children: React.ReactNode
@@ -102,6 +103,7 @@ const navLinks = [
             </svg>
         )
     },
+    { href: '/teacher/game/reports', label: 'Reports', icon: <BarChart2 className="w-5 h-5" /> }
 ]
 
 export default function TeacherLayout({ children, title = 'Teacher Panel' }: TeacherLayoutProps) {

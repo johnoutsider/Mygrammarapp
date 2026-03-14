@@ -24,6 +24,7 @@ export default function PlayGame() {
     const [game, setGame] = useState<ActiveGame | null>(null)
     const [currentUser, setCurrentUser] = useState<any>(null)
     const [answered, setAnswered] = useState(false)
+    const [selectedAnswerId, setSelectedAnswerId] = useState<number | null>(null)
     const [pointsEarned, setPointsEarned] = useState<number | null>(null)
     const [timeLeft, setTimeLeft] = useState<number>(20)
     const [quizQuestions, setQuizQuestions] = useState<any[]>([])
@@ -40,7 +41,7 @@ export default function PlayGame() {
         return unsub
     }, [router])
 
-    // Load quiz questions — reload whenever quizId changes
+    // Load quiz questions
     useEffect(() => {
         if (!game?.quizId) return
         setQuestionsLoaded(false)
@@ -57,31 +58,26 @@ export default function PlayGame() {
     }, [game?.quizId])
 
     // Listen to game state
-    // Listen to game state
     useEffect(() => {
         const unsub = onActiveGame((g) => {
             setGame(g)
             if (!g || g.status === 'ended') { router.push('/dashboard'); return }
-
-            // Only reset answered when question index actually changes
-            if (g.status === 'question') {
-                if (g.currentQuestion !== prevQuestionRef.current) {
-                    prevQuestionRef.current = g.currentQuestion
-                    setAnswered(false)
-                    setPointsEarned(null)
-                }
+            if (g.status === 'question' && g.currentQuestion !== prevQuestionRef.current) {
+                prevQuestionRef.current = g.currentQuestion
+                setAnswered(false)
+                setSelectedAnswerId(null)
+                setPointsEarned(null)
             }
         })
         return unsub
     }, [router])
 
-    // Synced timer — derived from RTDB questionStartedAt
+    // Synced timer
     useEffect(() => {
         if (!game || game.status !== 'question' || answered || !questionsLoaded) {
             if (timerRef.current) clearInterval(timerRef.current)
             return
         }
-
         const currentQ = quizQuestions[game.currentQuestion]
         const timeLimitSec = currentQ?.timeLimit || 20
         const startedAt = game.questionStartedAt || Date.now()
@@ -92,11 +88,9 @@ export default function PlayGame() {
             setTimeLeft(remaining)
             if (remaining === 0 && timerRef.current) clearInterval(timerRef.current)
         }
-
         tick()
         if (timerRef.current) clearInterval(timerRef.current)
         timerRef.current = setInterval(tick, 500)
-
         return () => { if (timerRef.current) clearInterval(timerRef.current) }
     }, [game?.currentQuestion, game?.status, game?.questionStartedAt, answered, questionsLoaded, quizQuestions])
 
@@ -110,14 +104,11 @@ export default function PlayGame() {
         const isCorrect = currentQ?.answers?.find((a: any) => a.id === answerId)?.isCorrect || false
 
         setAnswered(true)
+        setSelectedAnswerId(answerId)
 
         const pts = await submitAnswer(
-            currentUser.uid,
-            game.currentQuestion,
-            answerId,
-            isCorrect,
-            timeMs,
-            timeLimitMs
+            currentUser.uid, game.currentQuestion,
+            answerId, isCorrect, timeMs, timeLimitMs
         )
         setPointsEarned(pts)
     }
@@ -137,12 +128,11 @@ export default function PlayGame() {
             .map(([uid, p]: any) => ({ uid, ...p }))
             .sort((a, b) => b.score - a.score)
             .slice(0, 5)
-
         return (
             <div className="min-h-screen bg-gradient-to-br from-indigo-900 to-violet-900 flex flex-col items-center justify-center p-6">
                 <h2 className="text-3xl font-extrabold text-white mb-8">🏆 Leaderboard</h2>
                 <div className="w-full max-w-sm space-y-3">
-                    {sorted.map((p, i) => (
+                    {sorted.map((p: any, i) => (
                         <div key={p.uid}
                             className={`flex items-center justify-between px-5 py-3 rounded-xl font-bold text-white
                             ${i === 0 ? 'bg-yellow-500 text-yellow-900' :
@@ -163,7 +153,7 @@ export default function PlayGame() {
         const sorted = Object.entries(game.players || {})
             .map(([uid, p]: any) => ({ uid, ...p }))
             .sort((a: any, b: any) => b.score - a.score)
-        const myRank = sorted.findIndex(([uid]: any) => uid === currentUser?.uid) + 1
+        const myRank = sorted.findIndex((p: any) => p.uid === currentUser?.uid) + 1
         const myScore = (game.players as any)?.[currentUser?.uid]?.score || 0
 
         return (
@@ -172,12 +162,12 @@ export default function PlayGame() {
                 <h2 className="text-3xl font-extrabold mb-2">Game Over!</h2>
                 <p className="text-violet-300 mb-6">You finished #{myRank} with {myScore} points</p>
                 <div className="w-full max-w-sm space-y-3 mb-8">
-                    {sorted.slice(0, 5).map(([uid, p]: any, i) => (
-                        <div key={uid}
+                    {sorted.slice(0, 5).map((p: any, i) => (
+                        <div key={p.uid}
                             className={`flex items-center justify-between px-5 py-3 rounded-xl font-bold
-                            ${uid === currentUser?.uid ? 'bg-violet-500 ring-2 ring-white' :
+                            ${p.uid === currentUser?.uid ? 'bg-violet-500 ring-2 ring-white' :
                                     i === 0 ? 'bg-yellow-500 text-yellow-900' : 'bg-white/10'}`}>
-                            <span>{i + 1}. {p.name}</span>
+                            <span>{i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`} {p.name}</span>
                             <span>{p.score} pts</span>
                         </div>
                     ))}
@@ -192,7 +182,7 @@ export default function PlayGame() {
         )
     }
 
-    // ── Loading questions ──
+    // ── Loading ──
     if (!questionsLoaded) {
         return (
             <div className="min-h-screen bg-slate-900 flex items-center justify-center">
@@ -211,45 +201,110 @@ export default function PlayGame() {
     const answers = currentQ?.answers || []
     const styles = isTF ? TF_SHAPES : SHAPES
 
-    // ── Answered — full blocking screen ──
+    // ── REVEALING — teacher revealed the answer ──
+    if (game.status === 'revealing') {
+        const wasCorrect = pointsEarned !== null && pointsEarned > 0
+        return (
+            <div className="min-h-screen bg-slate-900 flex flex-col">
+
+                {/* Header */}
+                <div className="px-4 pt-5 pb-3 flex items-center justify-between">
+                    <span className="text-white/60 text-xs">
+                        Q {game.currentQuestion + 1}/{game.totalQuestions}
+                    </span>
+                    <span className={`text-sm font-bold px-3 py-1 rounded-lg
+                        ${!answered ? 'bg-orange-500/20 text-orange-400' :
+                            wasCorrect ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                        {!answered ? "⏰ Time's up" : wasCorrect ? '✓ Correct' : '✗ Wrong'}
+                    </span>
+                    <span className="text-white/60 text-xs">
+                        {(game.players as any)?.[currentUser?.uid]?.score || 0} pts
+                    </span>
+                </div>
+
+                {/* Question */}
+                <div className="px-4 pb-3 flex items-center justify-center">
+                    <h2 className="text-lg font-bold text-white text-center leading-snug max-w-sm">
+                        {currentQ?.text || ''}
+                    </h2>
+                </div>
+
+                {/* Points banner */}
+                {answered && wasCorrect && pointsEarned && (
+                    <div className="mx-4 mb-3 bg-green-500/20 text-green-300 rounded-xl p-2 text-center font-bold">
+                        +{pointsEarned} points!
+                    </div>
+                )}
+
+                {/* Answer tiles — correct green, wrong dimmed */}
+                <div className="flex-1 grid grid-cols-2 gap-3 p-3 pb-4">
+                    {answers.map((ans: any, i: number) => {
+                        const style = styles[i] || SHAPES[i]
+                        const isCorrect = ans.isCorrect
+                        const isSelected = selectedAnswerId === ans.id
+                        return (
+                            <div key={ans.id}
+                                className={`rounded-2xl flex flex-col items-center justify-center gap-2
+                                    min-h-[110px] px-3 py-4 transition-all duration-500
+                                    ${isCorrect
+                                        ? 'bg-green-500 ring-4 ring-white scale-[1.02] shadow-xl'
+                                        : isSelected
+                                            ? style.bg + ' opacity-40'
+                                            : style.bg + ' opacity-20'}`}>
+                                <span className="text-2xl text-white">{style.shape}</span>
+                                <span className="text-sm font-semibold text-white text-center leading-tight px-1">
+                                    {ans.text}
+                                </span>
+                                {isCorrect && (
+                                    <span className="text-white font-bold text-xs bg-white/20 px-2 py-0.5 rounded-full">
+                                        ✓ Correct
+                                    </span>
+                                )}
+                                {isSelected && !isCorrect && (
+                                    <span className="text-white font-bold text-xs bg-white/20 px-2 py-0.5 rounded-full">
+                                        ✗ Your answer
+                                    </span>
+                                )}
+                            </div>
+                        )
+                    })}
+                </div>
+
+                {/* Waiting for next */}
+                <div className="pb-6 flex justify-center">
+                    <div className="flex items-center gap-3 bg-white/10 px-5 py-3 rounded-2xl">
+                        <span className="relative flex h-2.5 w-2.5">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
+                            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-violet-500" />
+                        </span>
+                        <span className="text-violet-300 text-sm">Waiting for next question...</span>
+                    </div>
+                </div>
+            </div>
+        )
+    }
+
+    // ── Answered — waiting for teacher to reveal ──
     if (answered) {
         return (
             <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-center">
-
-                {/* Result circle */}
-                <div className={`w-28 h-28 rounded-full flex items-center justify-center text-6xl mb-5 shadow-xl
-                    ${pointsEarned && pointsEarned > 0 ? 'bg-green-500' : 'bg-red-500'}`}>
-                    {pointsEarned && pointsEarned > 0 ? '✓' : '✗'}
+                <div className="w-24 h-24 rounded-full bg-violet-600 flex items-center justify-center text-5xl mb-5 shadow-xl">
+                    ✓
                 </div>
-
-                <h2 className={`text-4xl font-extrabold mb-2
-                    ${pointsEarned && pointsEarned > 0 ? 'text-green-400' : 'text-red-400'}`}>
-                    {pointsEarned && pointsEarned > 0 ? 'Correct!' : 'Wrong!'}
-                </h2>
-
-                {pointsEarned && pointsEarned > 0 ? (
-                    <p className="text-white text-2xl font-bold mb-1">+{pointsEarned} points</p>
-                ) : (
-                    <p className="text-slate-400 text-base mb-1">Better luck next time!</p>
-                )}
-
+                <h2 className="text-3xl font-extrabold text-white mb-2">Answer Submitted!</h2>
                 <p className="text-slate-400 text-sm mb-10">
-                    Total score: {(game.players as any)?.[currentUser?.uid]?.score || 0} pts
+                    Waiting for teacher to reveal the answer...
                 </p>
-
-                {/* Accepted banner */}
-                <div className="bg-violet-900/60 border border-violet-500/40 rounded-2xl px-6 py-5 mb-4 w-full max-w-xs">
+                <div className="bg-violet-900/60 border border-violet-500/40 rounded-2xl px-6 py-5 mb-6 w-full max-w-xs">
                     <p className="text-violet-200 font-bold text-lg mb-1">✅ Answer Accepted</p>
                     <p className="text-violet-400 text-sm">Your response has been recorded</p>
                 </div>
-
-                {/* Waiting pulse */}
-                <div className="flex items-center gap-3 mt-2">
+                <div className="flex items-center gap-3">
                     <span className="relative flex h-2.5 w-2.5">
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
                         <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-violet-500" />
                     </span>
-                    <span className="text-violet-400 text-sm">Waiting for next question...</span>
+                    <span className="text-violet-400 text-sm">Waiting for teacher to reveal...</span>
                 </div>
             </div>
         )
@@ -259,7 +314,6 @@ export default function PlayGame() {
     return (
         <div className="min-h-screen bg-slate-900 flex flex-col">
 
-            {/* Top bar */}
             <div className="px-4 pt-5 pb-2 flex items-center justify-between">
                 <span className="text-white/60 text-xs font-medium">
                     Q {game.currentQuestion + 1}/{game.totalQuestions}
@@ -274,31 +328,26 @@ export default function PlayGame() {
                 </span>
             </div>
 
-            {/* Timer bar */}
             <div className="h-1.5 bg-white/10 mx-4 rounded-full overflow-hidden mt-1">
                 <div
-                    className={`h-full rounded-full transition-all duration-500 ${timerPct > 50 ? 'bg-green-400' :
-                        timerPct > 25 ? 'bg-yellow-400' : 'bg-red-400'
-                        }`}
+                    className={`h-full rounded-full transition-all duration-500
+                        ${timerPct > 50 ? 'bg-green-400' : timerPct > 25 ? 'bg-yellow-400' : 'bg-red-400'}`}
                     style={{ width: `${timerPct}%` }}
                 />
             </div>
 
-            {/* Question text */}
             <div className="px-4 pt-4 pb-3 flex items-center justify-center">
                 <h2 className="text-lg font-bold text-white text-center leading-snug max-w-sm">
                     {currentQ?.text || ''}
                 </h2>
             </div>
 
-            {/* Time up */}
             {timeLeft === 0 && (
                 <div className="mx-4 mb-2 bg-orange-500/20 text-orange-300 rounded-xl p-2 text-center font-semibold text-sm">
                     ⏰ Time&apos;s up!
                 </div>
             )}
 
-            {/* Answer buttons — shape + text */}
             <div className="flex-1 grid grid-cols-2 gap-3 p-3 pb-6">
                 {answers.map((ans: any, i: number) => {
                     const style = styles[i] || SHAPES[i]
@@ -312,8 +361,7 @@ export default function PlayGame() {
                                 rounded-2xl flex flex-col items-center justify-center gap-2
                                 text-white font-bold shadow-lg
                                 transition-all duration-150 active:scale-95
-                                min-h-[110px] px-3 py-4
-                                disabled:cursor-not-allowed
+                                min-h-[110px] px-3 py-4 disabled:cursor-not-allowed
                             `}
                         >
                             <span className="text-2xl">{style.shape}</span>

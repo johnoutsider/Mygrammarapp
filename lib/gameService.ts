@@ -1,7 +1,7 @@
 import { rtdb } from './firebase'
-import { ref, set, update, onValue, off, get, remove, serverTimestamp } from 'firebase/database'
+import { ref, set, update, onValue, off, get, remove } from 'firebase/database'
 
-export type GameStatus = 'lobby' | 'question' | 'leaderboard' | 'ended'
+export type GameStatus = 'lobby' | 'question' | 'revealing' | 'leaderboard' | 'ended'
 
 export interface GamePlayer {
     name: string
@@ -19,11 +19,36 @@ export interface ActiveGame {
     currentQuestion: number
     totalQuestions: number
     questionStartedAt: number | null
+    revealedAt: number | null
     players: Record<string, GamePlayer>
 }
 
+export interface GameReport {
+    sessionId: string
+    quizId: string
+    quizTitle: string
+    hostId: string
+    playedAt: number
+    totalQuestions: number
+    players: Record<string, { name: string; score: number; rank: number }>
+    questions: Array<{
+        text: string
+        answers: Array<{ id: number; text: string; isCorrect: boolean }>
+    }>
+    answers: Record<string, Record<string, {
+        answerId: number
+        correct: boolean
+        points: number
+    }>>
+}
+
 // Teacher: launch a new game
-export async function createGame(quizId: string, quizTitle: string, totalQuestions: number, hostId: string) {
+export async function createGame(
+    quizId: string,
+    quizTitle: string,
+    totalQuestions: number,
+    hostId: string
+) {
     const sessionId = Math.random().toString(36).slice(2, 10)
     await set(ref(rtdb, 'activeGame'), {
         sessionId,
@@ -34,6 +59,7 @@ export async function createGame(quizId: string, quizTitle: string, totalQuestio
         currentQuestion: 0,
         totalQuestions,
         questionStartedAt: null,
+        revealedAt: null,
         players: {}
     })
     return sessionId
@@ -49,9 +75,8 @@ export async function joinGame(uid: string, name: string) {
     })
 }
 
-// Teacher: start game / move to next question
+// Teacher: move to a question
 export async function goToQuestion(questionIndex: number) {
-    // Reset all players' answered flag
     const snap = await get(ref(rtdb, 'activeGame/players'))
     const players = snap.val() || {}
     const resetPlayers: Record<string, any> = {}
@@ -77,25 +102,31 @@ export async function submitAnswer(
 ) {
     const points = correct ? Math.round(1000 * (1 - (timeMs / timeLimitMs) * 0.5)) : 0
 
-    // Get current score first
     const snap = await get(ref(rtdb, `activeGame/players/${uid}/score`))
     const currentScore = snap.val() || 0
 
     await update(ref(rtdb), {
         [`activeGame/players/${uid}/answered`]: true,
         [`activeGame/players/${uid}/score`]: currentScore + points,
-        [`activeGame/answers/${uid}`]: {
-            questionIndex,
+        [`activeGame/answers/${uid}/${questionIndex}`]: {
             answerId,
             correct,
-            timeMs,
             points
         }
     })
 
     return points
 }
-// Teacher: show leaderboard between questions
+
+// Teacher: reveal the correct answer
+export async function revealAnswer() {
+    await update(ref(rtdb, 'activeGame'), {
+        status: 'revealing',
+        revealedAt: Date.now()
+    })
+}
+
+// Teacher: show leaderboard
 export async function showLeaderboard() {
     await update(ref(rtdb, 'activeGame'), { status: 'leaderboard' })
 }
@@ -105,10 +136,64 @@ export async function endGame() {
     await update(ref(rtdb, 'activeGame'), { status: 'ended' })
 }
 
-// Teacher: fully clear game (after session is over)
+// Teacher: save game report to Firestore before clearing RTDB
+export async function saveGameReport(quizQuestions: any[]): Promise<string | null> {
+    try {
+        // Read everything from RTDB
+        const gameSnap = await get(ref(rtdb, 'activeGame'))
+        if (!gameSnap.exists()) return null
+        const game = gameSnap.val()
+
+        const answersSnap = await get(ref(rtdb, 'activeGame/answers'))
+        const rawAnswers = answersSnap.val() || {}
+
+        // Rank players by score
+        const sortedPlayers = Object.entries(game.players || {})
+            .map(([uid, p]: any) => ({ uid, ...p }))
+            .sort((a: any, b: any) => b.score - a.score)
+
+        const rankedPlayers: Record<string, { name: string; score: number; rank: number }> = {}
+        sortedPlayers.forEach((p: any, i) => {
+            rankedPlayers[p.uid] = { name: p.name, score: p.score, rank: i + 1 }
+        })
+
+        // Strip questions down to just what we need
+        const questions = quizQuestions.map(q => ({
+            text: q.text,
+            answers: (q.answers || []).map((a: any) => ({
+                id: a.id,
+                text: a.text,
+                isCorrect: a.isCorrect
+            }))
+        }))
+
+        const report: GameReport = {
+            sessionId: game.sessionId,
+            quizId: game.quizId,
+            quizTitle: game.quizTitle,
+            hostId: game.hostId,
+            playedAt: Date.now(),
+            totalQuestions: game.totalQuestions,
+            players: rankedPlayers,
+            questions,
+            answers: rawAnswers
+        }
+
+        // Save to Firestore
+        const { db } = await import('./firebase')
+        const { doc, setDoc } = await import('firebase/firestore')
+        await setDoc(doc(db, 'gameReports', game.sessionId), report)
+
+        return game.sessionId
+    } catch (err) {
+        console.error('Failed to save game report:', err)
+        return null
+    }
+}
+
+// Teacher: fully clear RTDB after report is saved
 export async function clearGame() {
     await remove(ref(rtdb, 'activeGame'))
-    await remove(ref(rtdb, 'activeGame/answers'))
 }
 
 // Listen to the entire active game
