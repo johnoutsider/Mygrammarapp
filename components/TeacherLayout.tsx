@@ -5,7 +5,8 @@ import { useRouter, usePathname } from 'next/navigation'
 import { auth } from '@/lib/firebase'
 import { useAuthState } from 'react-firebase-hooks/auth'
 import { useEffect, useState } from 'react'
-import { Gamepad2, BarChart2 } from 'lucide-react'
+import { Gamepad2, BarChart2, BookOpen } from 'lucide-react'
+
 
 interface TeacherLayoutProps {
     children: React.ReactNode
@@ -56,6 +57,7 @@ const navGroups = [
         label: 'Grammar',
         icon: <Gamepad2 className="w-5 h-5" />,
         links: [
+            { href: '/teacher/my-quizzes', label: 'My Quizzes', icon: <BookOpen size={16} /> },
             { href: '/teacher/game', label: 'Live Game', icon: <Gamepad2 className="w-4 h-4" /> },
             {
                 href: '/teacher/question-pool', label: 'Question Pool', icon: (
