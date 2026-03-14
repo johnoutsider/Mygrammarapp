@@ -11,7 +11,7 @@ import IELTSRubric from '@/components/teacher/essay/IELTSRubric'
 import { onActiveGame, joinGame } from '@/lib/gameService'
 import type { ActiveGame } from '@/lib/gameService'
 import { useAccessMode } from '@/hooks/useAccessMode'
-import { getVisibleGroups, accessModeLabel } from '@/lib/accessControl'
+import { getVisibleGroups } from '@/lib/accessControl'
 
 export default function Dashboard() {
     const router = useRouter()
@@ -20,36 +20,28 @@ export default function Dashboard() {
     const [userName, setUserName] = useState<string>('')
     const [loading, setLoading] = useState(true)
     const [pastReports, setPastReports] = useState<any[]>([])
+    const [totalGamesPlayed, setTotalGamesPlayed] = useState(0) // ✅ FIX 1: separate total count
+    const [accuracy, setAccuracy] = useState<number>(0)
     const [stats, setStats] = useState({
         submittedEssays: 0,
         reviewsCompleted: 0,
         reviewsPending: 0,
     })
 
-    // Access control
     const { accessMode, loading: accessLoading } = useAccessMode()
     const { showWriting, showGrammar } = getVisibleGroups(accessMode)
 
-    // ── Auth + data fetch ────────────────────────────────────────────────────
-
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, async (user) => {
-            if (!user) {
-                router.push('/')
-                return
-            }
+            if (!user) { router.push('/'); return }
 
             try {
                 const { getUserProfile } = await import('@/lib/auth')
                 const profile = await getUserProfile(user.uid)
-                if (profile?.role === 'teacher') {
-                    router.replace('/teacher')
-                    return
-                }
+                if (profile?.role === 'teacher') { router.replace('/teacher'); return }
 
                 setUserName(profile?.displayName || profile?.name || '')
 
-                // Writing stats — only fetch if needed
                 const essaysQuery = query(collection(db, 'essays'), where('studentId', '==', user.uid))
                 const essaysSnapshot = await getDocs(essaysQuery)
 
@@ -65,15 +57,41 @@ export default function Dashboard() {
                     reviewsPending: assignedSnapshot.size - reviewsSnapshot.size,
                 })
 
-                // Grammar: past game reports
+                // Fetch ALL game reports
                 const reportsSnap = await getDocs(
                     query(collection(db, 'gameReports'), orderBy('playedAt', 'desc'))
                 )
-                const myReports = reportsSnap.docs
-                    .filter(d => d.data().players?.[user.uid])
-                    .slice(0, 5)
+
+                const allMyReports = reportsSnap.docs
+                    .filter(d => {
+                        const data = d.data()
+                        return (
+                            data.players?.[user.uid] ||
+                            data.playerIds?.includes(user.uid)
+                        )
+                    })
                     .map(d => ({ id: d.id, ...d.data() }))
-                setPastReports(myReports)
+
+                // ✅ FIX 1: store total count separately before slicing
+                setTotalGamesPlayed(allMyReports.length)
+
+                // Accuracy calculation
+                let totalCorrect = 0
+                let totalAnswered = 0
+                allMyReports.forEach((r: any) => {
+                    const userAnswers = r.answers?.[user.uid] || {}
+                    Object.values(userAnswers).forEach((a: any) => {
+                        totalAnswered++
+                        if (a.correct) totalCorrect++
+                    })
+                })
+                const computedAccuracy = totalAnswered > 0
+                    ? Math.round((totalCorrect / totalAnswered) * 100)
+                    : 0
+                setAccuracy(computedAccuracy)
+
+                // Keep only 5 most recent for the Recent Games list
+                setPastReports(allMyReports.slice(0, 5))
 
             } catch (error) {
                 console.error('Error fetching dashboard data:', error)
@@ -85,8 +103,6 @@ export default function Dashboard() {
 
         return () => unsubscribe()
     }, [router])
-
-    // ── Live game listener ───────────────────────────────────────────────────
 
     useEffect(() => {
         const unsub = onActiveGame(setActiveGame)
@@ -100,8 +116,6 @@ export default function Dashboard() {
         router.push('/play')
     }
 
-    // ── Loading ──────────────────────────────────────────────────────────────
-
     if (loading || accessLoading) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -110,15 +124,17 @@ export default function Dashboard() {
         )
     }
 
-    // ── Welcome subtitle reflects access ─────────────────────────────────────
-
     const welcomeSubtitle = accessMode === 'both'
         ? "Here's your writing and grammar overview"
         : accessMode === 'writing'
             ? "Here's your writing progress"
             : "Here's your grammar game progress"
 
-    // ── Render ───────────────────────────────────────────────────────────────
+    const accuracyColor = accuracy >= 70
+        ? { bar: 'bg-emerald-500', text: 'text-emerald-600', label: '🔥 Great' }
+        : accuracy >= 40
+            ? { bar: 'bg-amber-400', text: 'text-amber-600', label: '📈 Getting there' }
+            : { bar: 'bg-red-400', text: 'text-red-500', label: '💪 Keep practising' }
 
     return (
         <StudentLayout title="Dashboard">
@@ -132,7 +148,7 @@ export default function Dashboard() {
                     <p className="text-slate-500">{welcomeSubtitle}</p>
                 </div>
 
-                {/* Live game banner — always visible */}
+                {/* Live game banner */}
                 {activeGame && activeGame.status === 'lobby' && (
                     <div className="mb-6 rounded-2xl bg-gradient-to-r from-violet-600 to-indigo-600 p-5 text-white shadow-lg flex items-center justify-between">
                         <div>
@@ -158,7 +174,6 @@ export default function Dashboard() {
                         : 'grid-cols-1 sm:grid-cols-2'
                         }`}>
 
-                        {/* Writing stats */}
                         {showWriting && (
                             <>
                                 <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
@@ -181,22 +196,41 @@ export default function Dashboard() {
                             </>
                         )}
 
-                        {/* Grammar stats — only when writing is hidden (grammar-only mode) */}
-                        {showGrammar && !showWriting && (
+                        {showGrammar && (
                             <>
+                                {/* ✅ FIX 1: use totalGamesPlayed instead of pastReports.length */}
                                 <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
                                     <div className="text-4xl mb-3">🎮</div>
-                                    <div className="text-3xl font-bold text-slate-900 mb-1">{pastReports.length}</div>
+                                    <div className="text-3xl font-bold text-slate-900 mb-1">{totalGamesPlayed}</div>
                                     <div className="text-slate-700 font-medium">Games Played</div>
                                 </div>
+
+                                {/* Accuracy card */}
                                 <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
-                                    <div className="text-4xl mb-3">🏆</div>
-                                    <div className="text-3xl font-bold text-slate-900 mb-1">
-                                        {pastReports.length > 0
-                                            ? Math.max(...pastReports.map((r: any) => r.players?.[currentUser?.uid]?.score || 0))
-                                            : 0}
+                                    <div className="flex items-start justify-between mb-1">
+                                        <div className="text-4xl">🎯</div>
+                                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 ${accuracyColor.text}`}>
+                                            {accuracyColor.label}
+                                        </span>
                                     </div>
-                                    <div className="text-slate-700 font-medium">Best Score</div>
+                                    <div className={`text-3xl font-bold mb-0.5 ${accuracyColor.text}`}>
+                                        {accuracy}%
+                                    </div>
+                                    <div className="text-slate-700 font-medium mb-3">Accuracy</div>
+                                    <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                                        <div
+                                            className={`h-2.5 rounded-full transition-all duration-700 ${accuracyColor.bar}`}
+                                            style={{ width: `${accuracy}%` }}
+                                        />
+                                    </div>
+                                    <div className="flex justify-between text-[10px] text-slate-400 mt-1 font-medium">
+                                        <span>0%</span>
+                                        <span>50%</span>
+                                        <span>100%</span>
+                                    </div>
+                                    {totalGamesPlayed === 0 && (
+                                        <p className="text-xs text-slate-400 mt-2">Play a game to see your accuracy</p>
+                                    )}
                                 </div>
                             </>
                         )}
@@ -208,7 +242,6 @@ export default function Dashboard() {
                     <h2 className="text-2xl font-semibold text-slate-900 mb-4">Quick Actions</h2>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 
-                        {/* Writing actions */}
                         {showWriting && (
                             <>
                                 <Link href="/submit-essay"
@@ -217,21 +250,18 @@ export default function Dashboard() {
                                     <h3 className="text-xl font-bold mb-1">Submit New Essay</h3>
                                     <p className="text-slate-600 text-sm">Upload your essay and get AI feedback</p>
                                 </Link>
-
                                 <Link href="/review-peers"
                                     className="bg-white border border-slate-200 text-slate-900 p-6 rounded-lg hover:border-green-500 hover:shadow-md transition-all text-left flex flex-col justify-center">
                                     <div className="text-3xl mb-2">🤝</div>
                                     <h3 className="text-xl font-bold mb-1">Review Peers</h3>
                                     <p className="text-slate-600 text-sm">Help classmates by reviewing their essays</p>
                                 </Link>
-
                                 <Link href="/my-essays"
                                     className="bg-white border border-slate-200 text-slate-900 p-6 rounded-lg hover:border-purple-500 hover:shadow-md transition-all text-left flex flex-col justify-center">
                                     <div className="text-3xl mb-2">📊</div>
                                     <h3 className="text-xl font-bold mb-1">View My Essays</h3>
                                     <p className="text-slate-600 text-sm">See your submissions and feedback</p>
                                 </Link>
-
                                 <Link href="/progress/writing"
                                     className="bg-white border border-slate-200 text-slate-900 p-6 rounded-lg hover:border-orange-500 hover:shadow-md transition-all text-left flex flex-col justify-center">
                                     <div className="text-3xl mb-2">📈</div>
@@ -241,23 +271,15 @@ export default function Dashboard() {
                             </>
                         )}
 
-                        {/* Grammar actions */}
+                        {/* ✅ FIX 2: replaced teacher-only links with student-appropriate ones */}
                         {showGrammar && (
                             <>
-                                <Link href="/quiz-create"
+                                <Link href="/reports"
                                     className="bg-white border border-slate-200 text-slate-900 p-6 rounded-lg hover:border-violet-500 hover:shadow-md transition-all text-left flex flex-col justify-center">
-                                    <div className="text-3xl mb-2">🧩</div>
-                                    <h3 className="text-xl font-bold mb-1">Create Quiz</h3>
-                                    <p className="text-slate-600 text-sm">Build a grammar quiz for your class</p>
+                                    <div className="text-3xl mb-2">📊</div>
+                                    <h3 className="text-xl font-bold mb-1">My Game Reports</h3>
+                                    <p className="text-slate-600 text-sm">View all your past game results</p>
                                 </Link>
-
-                                <Link href="/question-pool"
-                                    className="bg-white border border-slate-200 text-slate-900 p-6 rounded-lg hover:border-indigo-500 hover:shadow-md transition-all text-left flex flex-col justify-center">
-                                    <div className="text-3xl mb-2">🎯</div>
-                                    <h3 className="text-xl font-bold mb-1">Question Pool</h3>
-                                    <p className="text-slate-600 text-sm">Browse and practice grammar questions</p>
-                                </Link>
-
                                 <Link href="/progress/grammar"
                                     className="bg-white border border-slate-200 text-slate-900 p-6 rounded-lg hover:border-orange-500 hover:shadow-md transition-all text-left flex flex-col justify-center">
                                     <div className="text-3xl mb-2">📈</div>
@@ -269,17 +291,23 @@ export default function Dashboard() {
                     </div>
                 </div>
 
-                {/* ── Recent Games — only if grammar access ── */}
+                {/* ── Recent Games ── */}
                 {showGrammar && pastReports.length > 0 && (
                     <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
                         <h2 className="text-2xl font-semibold text-slate-900 mb-4">🎮 Recent Games</h2>
                         <div className="space-y-2">
                             {pastReports.map((r: any) => {
                                 const me = r.players[currentUser?.uid]
+                                const gameAnswers = Object.values(r.answers?.[currentUser?.uid] || {}) as any[]
+                                const gameCorrect = gameAnswers.filter((a: any) => a.correct).length
+                                const gameAccuracy = gameAnswers.length > 0
+                                    ? Math.round((gameCorrect / gameAnswers.length) * 100)
+                                    : null
+
                                 return (
                                     <div
                                         key={r.id}
-                                        onClick={() => router.push(`/play/report/${r.id}`)}
+                                        onClick={() => router.push(`/reports`)}
                                         className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 flex items-center justify-between hover:border-violet-300 hover:shadow-sm cursor-pointer transition-all"
                                     >
                                         <div>
@@ -295,20 +323,35 @@ export default function Dashboard() {
                                                 <p className="font-bold text-violet-600">{me?.score || 0} pts</p>
                                                 <p className="text-xs text-slate-400">Rank #{me?.rank}</p>
                                             </div>
+                                            {gameAccuracy !== null && (
+                                                <div>
+                                                    <p className={`font-bold text-sm ${gameAccuracy >= 70 ? 'text-emerald-500' : gameAccuracy >= 40 ? 'text-amber-500' : 'text-red-400'}`}>
+                                                        {gameAccuracy}%
+                                                    </p>
+                                                    <p className="text-xs text-slate-400">accuracy</p>
+                                                </div>
+                                            )}
                                             <span className="text-slate-300 text-lg">→</span>
                                         </div>
                                     </div>
                                 )
                             })}
                         </div>
+
+                        {/* ✅ Link to full reports page */}
+                        {totalGamesPlayed > 5 && (
+                            <div className="mt-4 text-center">
+                                <Link href="/reports" className="text-sm text-violet-600 hover:underline font-medium">
+                                    View all {totalGamesPlayed} games →
+                                </Link>
+                            </div>
+                        )}
                     </div>
                 )}
 
             </main>
 
-            {/* IELTS Rubric — only relevant for writing students */}
             {showWriting && <IELTSRubric />}
-
         </StudentLayout>
     )
 }

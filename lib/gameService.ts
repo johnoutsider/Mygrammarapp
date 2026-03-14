@@ -30,16 +30,10 @@ export interface GameReport {
     hostId: string
     playedAt: number
     totalQuestions: number
+    playerIds: string[]   // ✅ ADD THIS
     players: Record<string, { name: string; score: number; rank: number }>
-    questions: Array<{
-        text: string
-        answers: Array<{ id: number; text: string; isCorrect: boolean }>
-    }>
-    answers: Record<string, Record<string, {
-        answerId: number
-        correct: boolean
-        points: number
-    }>>
+    questions: Array<{ text: string; answers: Array<{ id: number; text: string; isCorrect: boolean }> }>
+    answers: Record<string, Record<number, { answerId: number; correct: boolean; points: number }>>
 }
 
 // Teacher: launch a new game
@@ -174,10 +168,12 @@ export async function saveGameReport(quizQuestions: any[]): Promise<string | nul
             hostId: game.hostId,
             playedAt: Date.now(),
             totalQuestions: game.totalQuestions,
+            playerIds: Object.keys(rankedPlayers),  // ✅ ADD THIS LINE
             players: rankedPlayers,
             questions,
             answers: rawAnswers
         }
+
 
         // Save to Firestore
         const { db } = await import('./firebase')
