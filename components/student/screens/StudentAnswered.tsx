@@ -2,25 +2,25 @@
 
 export default function StudentAnswered() {
     return (
-        <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-center">
-            <div className="w-24 h-24 rounded-full bg-violet-600 flex items-center justify-center text-5xl mb-5 shadow-xl">
-                ✓
+        <div className="min-h-screen bg-gradient-to-br from-teal-400 to-cyan-500 flex flex-col items-center justify-center gap-6 p-6">
+
+            {/* Big checkmark */}
+            <div className="bg-green-500 rounded-full w-28 h-28 flex items-center justify-center shadow-lg ring-4 ring-white">
+                <span className="text-white text-6xl font-bold">✓</span>
             </div>
-            <h2 className="text-3xl font-extrabold text-white mb-2">Answer Submitted!</h2>
-            <p className="text-slate-400 text-sm mb-10">
-                Waiting for teacher to reveal the answer...
-            </p>
-            <div className="bg-violet-900/60 border border-violet-500/40 rounded-2xl px-6 py-5 mb-6 w-full max-w-xs">
-                <p className="text-violet-200 font-bold text-lg mb-1">✅ Answer Accepted</p>
-                <p className="text-violet-400 text-sm">Your response has been recorded</p>
+
+            {/* Text */}
+            <div className="text-center text-white">
+                <h2 className="text-3xl font-extrabold mb-2">Answer Submitted!</h2>
+                <p className="text-white/80 text-base">Waiting for teacher to reveal the answer...</p>
             </div>
-            <div className="flex items-center gap-3">
-                <span className="relative flex h-2.5 w-2.5">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
-                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-violet-500" />
-                </span>
-                <span className="text-violet-400 text-sm">Waiting for teacher to reveal...</span>
+
+            {/* Waiting bar */}
+            <div className="bg-black/30 text-white/80 text-sm font-medium px-5 py-2.5 rounded-full flex items-center gap-2">
+                <span className="w-2 h-2 bg-purple-400 rounded-full animate-pulse" />
+                Waiting for teacher to reveal...
             </div>
+
         </div>
     )
 }
