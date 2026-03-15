@@ -1,6 +1,6 @@
 'use client'
 
-import type { ActiveGame } from '@/lib/gameService'
+import type { ActiveGame, GameTeam } from '@/lib/gameService'
 
 const SHAPES = [
     { bg: 'bg-orange-500', shape: '▲' },
@@ -14,7 +14,7 @@ const TF_SHAPES = [
 ]
 
 export default function StudentRevealing({
-    game, currentQ, currentUserId, selectedAnswerId, pointsEarned, answered
+    game, currentQ, currentUserId, selectedAnswerId, pointsEarned, answered, myTeam
 }: {
     game: ActiveGame
     currentQ: any
@@ -22,12 +22,18 @@ export default function StudentRevealing({
     selectedAnswerId: number | null
     pointsEarned: number | null
     answered: boolean
+    myTeam: (GameTeam & { id: string }) | null
 }) {
     const isTF = currentQ?.type === 'true_or_false'
     const answers = currentQ?.answers || []
     const styles = isTF ? TF_SHAPES : SHAPES
-    const myScore = (game.players as any)?.[currentUserId]?.score || 0
+
     const wasCorrect = pointsEarned !== null && pointsEarned > 0
+    const myScore = myTeam
+        ? (myTeam.score || 0)
+        : (game.players?.[currentUserId]?.score || 0)
+
+
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-teal-400 to-cyan-500 flex flex-col">
@@ -37,11 +43,19 @@ export default function StudentRevealing({
                 <span className="font-bold text-sm">
                     Q{game.currentQuestion + 1} / {game.totalQuestions}
                 </span>
+                {myTeam ? (
+                    <span className="flex items-center gap-1.5">
+                        <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${myTeam.color}`} />
+                        {myTeam.name}
+                    </span>
+                ) : (
+                    <span>{game.quizTitle}</span>
+                )}
                 <span className={`font-bold text-sm px-3 py-1 rounded-full ${!answered
-                        ? 'bg-orange-600'
-                        : wasCorrect
-                            ? 'bg-green-500'
-                            : 'bg-red-500'
+                    ? 'bg-orange-600'
+                    : wasCorrect
+                        ? 'bg-green-500'
+                        : 'bg-red-500'
                     }`}>
                     {!answered ? "⏰ Time's up" : wasCorrect ? '✓ Correct!' : '✗ Wrong'}
                 </span>

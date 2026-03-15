@@ -252,3 +252,15 @@ export function onTeams(callback: (teams: Record<string, GameTeam>) => void) {
     onValue(r, snap => callback(snap.val() || {}))
     return () => off(r)
 }
+export function getMyTeam(
+    game: ActiveGame,
+    uid: string
+): (GameTeam & { id: string }) | null {
+    if (!game?.teams) return null
+    for (const [id, team] of Object.entries(game.teams)) {
+        if (team.members?.[uid] !== undefined) {
+            return { id, ...team }
+        }
+    }
+    return null
+}

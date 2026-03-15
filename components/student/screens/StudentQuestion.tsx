@@ -1,6 +1,6 @@
 'use client'
 
-import type { ActiveGame } from '@/lib/gameService'
+import type { ActiveGame, GameTeam } from '@/lib/gameService'
 
 const ANSWER_COLORS = ['bg-orange-500', 'bg-blue-500', 'bg-green-500', 'bg-red-500']
 const ANSWER_SHAPES = ['▲', '◆', '●', '■']
@@ -8,7 +8,7 @@ const TF_COLORS = ['bg-blue-500', 'bg-red-500']
 const TF_SHAPES = ['✓', '✗']
 
 export default function StudentQuestion({
-    game, currentQ, timeLeft, timeLimitSec, currentUserId, onAnswer
+    game, currentQ, timeLeft, timeLimitSec, currentUserId, onAnswer, myTeam
 }: {
     game: ActiveGame
     currentQ: any
@@ -16,13 +16,16 @@ export default function StudentQuestion({
     timeLimitSec: number
     currentUserId: string
     onAnswer: (answerId: number) => void
+    myTeam: (GameTeam & { id: string }) | null
 }) {
     const timerPct = (timeLeft / timeLimitSec) * 100
     const isTF = currentQ?.type === 'true_or_false'
     const answers = currentQ?.answers || []
     const colors = isTF ? TF_COLORS : ANSWER_COLORS
     const shapes = isTF ? TF_SHAPES : ANSWER_SHAPES
-    const myScore = (game.players as any)?.[currentUserId]?.score || 0
+    const myScore = myTeam
+        ? (myTeam.score || 0)
+        : (game.players?.[currentUserId]?.score || 0)
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-teal-400 to-cyan-500 flex flex-col">
@@ -32,8 +35,15 @@ export default function StudentQuestion({
                 <span className="font-bold text-sm">
                     Q{game.currentQuestion + 1} / {game.totalQuestions}
                 </span>
-                <span className="font-semibold text-sm">{game.quizTitle}</span>
-                <span className="font-bold text-sm">{myScore} pts</span>
+                {myTeam ? (
+                    <span className="flex items-center gap-1.5">
+                        <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${myTeam.color}`} />
+                        {myTeam.name}
+                    </span>
+                ) : (
+                    <span>{game.quizTitle}</span>
+                )}
+                <span>{myScore.toLocaleString()} pts</span>
             </div>
 
             {/* Green progress bar */}

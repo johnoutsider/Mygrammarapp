@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { auth } from '@/lib/firebase'
 import { onAuthStateChanged } from 'firebase/auth'
-import { onActiveGame, submitAnswer, joinGame } from '@/lib/gameService'
+import { onActiveGame, submitAnswer, joinGame, getMyTeam } from '@/lib/gameService'
 import type { ActiveGame } from '@/lib/gameService'
 
 // ── Components ─────────────────────────────────────────────────────────────────
@@ -43,13 +43,20 @@ export default function PlayGame() {
         })
         return unsub
     }, [router])
+
     useEffect(() => {
-        if (!currentUser || !game || game.status !== 'lobby') return
-        const name = currentUser.displayName
-            || currentUser.email?.split('@')[0]
-            || 'Student'
-        joinGame(currentUser.uid, name)
-    }, [game?.status, currentUser?.uid])
+        if (!currentUser) return
+        // Join as soon as we have a user — lobby check happens inside
+        const unsub = onActiveGame((g) => {
+            if (g?.status === 'lobby') {
+                const name = currentUser.displayName
+                    || currentUser.email?.split('@')[0]
+                    || 'Student'
+                joinGame(currentUser.uid, name)
+            }
+        })
+        return unsub
+    }, [currentUser?.uid])
 
     // ── Load quiz questions ────────────────────────────────────────────────────
     useEffect(() => {
@@ -129,9 +136,21 @@ export default function PlayGame() {
         setPointsEarned(pts)
     }
 
+    // ── Compute my team (used by all screens below) ────────────────────────────
+    const currentGame = endedGame || game
+    const myTeam = currentUser && currentGame
+        ? getMyTeam(currentGame, currentUser.uid)
+        : null
+
     // ── Guard: show Game Over screen (even after Firestore doc is deleted) ─────
     if (endedGame && currentUser) {
-        return <StudentGameEnded game={endedGame} currentUserId={currentUser.uid} />
+        return (
+            <StudentGameEnded
+                game={endedGame}
+                currentUserId={currentUser.uid}
+                myTeam={myTeam}
+            />
+        )
     }
 
     // ── Guard: no active game → go back to dashboard ──────────────────────────
@@ -165,7 +184,7 @@ export default function PlayGame() {
     }
 
     if (game.status === 'ended') {
-        return <StudentGameEnded game={game} currentUserId={currentUser.uid} />
+        return <StudentGameEnded game={game} currentUserId={currentUser.uid} myTeam={myTeam} />
     }
 
     if (!questionsLoaded) {
@@ -188,12 +207,18 @@ export default function PlayGame() {
                 selectedAnswerId={selectedAnswerId}
                 pointsEarned={pointsEarned}
                 answered={answered}
+                myTeam={myTeam}
             />
         )
     }
 
     if (answered) {
-        return <StudentAnswered />
+        return (
+            <StudentAnswered
+                myTeam={myTeam}
+                game={game}
+            />
+        )
     }
 
     return (
@@ -204,6 +229,7 @@ export default function PlayGame() {
             timeLimitSec={timeLimitSec}
             currentUserId={currentUser.uid}
             onAnswer={handleAnswer}
+            myTeam={myTeam}
         />
     )
 }

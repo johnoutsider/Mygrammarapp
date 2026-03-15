@@ -149,6 +149,20 @@ export default function HostPage() {
         return () => { if (timerRef.current) clearInterval(timerRef.current) }
     }, [game?.currentQuestion, game?.status, game?.questionStartedAt, quizQuestions])
 
+    // ── Auto-advance when ALL players answered ───────────────────────────────────
+    useEffect(() => {
+        if (!game || game.status !== 'question') return
+        const playerCount = Object.keys(game.players || {}).length
+        if (playerCount === 0) return
+        if (answeredCount >= playerCount && !revealFiredRef.current) {
+            revealFiredRef.current = true
+            if (timerRef.current) clearInterval(timerRef.current)
+            revealAnswer()
+        }
+    }, [answeredCount, game?.status, game?.currentQuestion])
+
+
+
     // ── Auto-flow: revealing → leaderboard ────────────────────────────────────
     useEffect(() => {
         if (!game || game.status !== 'revealing') {
@@ -249,9 +263,8 @@ export default function HostPage() {
     }
 
     if (game.status === 'ended') {
-        return <GameEnded players={players} reportSessionId={reportSessionId} />
+        return <GameEnded players={players} reportSessionId={reportSessionId} game={game} />
     }
-
     if (game.status === 'revealing') {
         return (
             <RevealScreen

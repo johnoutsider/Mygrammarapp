@@ -1,6 +1,17 @@
 'use client'
 
+import { useEffect } from 'react'
+import { auth } from '@/lib/firebase'
+import { joinGame } from '@/lib/gameService'
+
 export default function StudentLobby() {
+    useEffect(() => {
+        const user = auth.currentUser
+        if (!user) return
+        const name = user.displayName || user.email?.split('@')[0] || 'Student'
+        joinGame(user.uid, name)
+    }, [])
+
     return (
         <div className="min-h-screen bg-gradient-to-br from-indigo-900 to-violet-900 flex flex-col items-center justify-center p-6 text-white text-center">
             <div className="relative mb-8">
