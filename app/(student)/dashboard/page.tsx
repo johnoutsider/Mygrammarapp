@@ -59,18 +59,15 @@ export default function Dashboard() {
 
                 // Fetch ALL game reports
                 const reportsSnap = await getDocs(
-                    query(collection(db, 'gameReports'), orderBy('playedAt', 'desc'))
+                    query(
+                        collection(db, 'gameReports'),
+                        where('playerIds', 'array-contains', user.uid),
+                        orderBy('playedAt', 'desc')
+                    )
                 )
+                const allMyReports = reportsSnap.docs.map(d => ({ id: d.id, ...d.data() }))
 
-                const allMyReports = reportsSnap.docs
-                    .filter(d => {
-                        const data = d.data()
-                        return (
-                            data.players?.[user.uid] ||
-                            data.playerIds?.includes(user.uid)
-                        )
-                    })
-                    .map(d => ({ id: d.id, ...d.data() }))
+
 
                 // ✅ FIX 1: store total count separately before slicing
                 setTotalGamesPlayed(allMyReports.length)

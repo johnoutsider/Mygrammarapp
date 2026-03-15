@@ -4,9 +4,11 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { auth, db } from '@/lib/firebase'
 import { onAuthStateChanged } from 'firebase/auth'
-import { collection, query, getDocs, orderBy } from 'firebase/firestore'
+import { collection, query, getDocs, orderBy, where } from 'firebase/firestore'
 import StudentLayout from '@/components/StudentLayout'
 import type { GameReport } from '@/lib/gameService'
+
+
 
 export default function MyReports() {
     const router = useRouter()
@@ -19,18 +21,14 @@ export default function MyReports() {
 
             try {
                 const snap = await getDocs(
-                    query(collection(db, 'gameReports'), orderBy('playedAt', 'desc'))
+                    query(
+                        collection(db, 'gameReports'),
+                        where('playerIds', 'array-contains', user.uid),
+                        orderBy('playedAt', 'desc')
+                    )
                 )
+                const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as unknown as GameReport))
 
-                const data = snap.docs
-                    .filter(d => {
-                        const report = d.data()
-                        return (
-                            report.players?.[user.uid] ||
-                            report.playerIds?.includes(user.uid)
-                        )
-                    })
-                    .map(d => ({ id: d.id, ...d.data() } as unknown as GameReport))
 
                 setReports(data)
             } catch (err) {
