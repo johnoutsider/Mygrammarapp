@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation'
 import { deleteTeacherQuiz, TeacherQuiz } from '@/lib/quizService'
 import { useState } from 'react'
+import { Play } from 'lucide-react'
 
 export default function QuizCard({
     quiz,
@@ -21,42 +22,57 @@ export default function QuizCard({
         onDeleted(quiz.id)
     }
 
-    return (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden hover:shadow-md transition-shadow">
+    const handlePlay = () => {
+        router.push(
+            `/teacher/game/setup?id=${quiz.id}&title=${encodeURIComponent(quiz.title)}&total=${quiz.questions?.length || 0}`
+        )
+    }
 
-            {/* Cover block */}
-            <div
-                className="h-36 flex items-center justify-center"
-                style={{ backgroundColor: quiz.coverColor || '#0d9488' }}
-            >
-                <span className="text-white text-2xl font-extrabold text-center px-4 leading-tight drop-shadow">
+    const hasQuestions = (quiz.questions?.length || 0) > 0
+
+    return (
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden flex flex-col hover:shadow-md transition-all">
+
+            {/* ✅ Cover block — quiz title now visible */}
+            <div className="h-28 bg-gradient-to-br from-teal-400 to-cyan-500 flex items-center justify-center px-4">
+                <h3 className="text-white font-extrabold text-lg text-center leading-snug line-clamp-2 drop-shadow">
                     {quiz.title}
-                </span>
+                </h3>
             </div>
 
             {/* Body */}
-            <div className="p-4">
-                <h3 className="font-bold text-slate-800 text-base truncate mb-1">
-                    {quiz.title}
-                </h3>
+            <div className="p-4 flex flex-col flex-1 gap-3">
 
-                <div className="flex items-center gap-2 mb-3 flex-wrap">
-                    <span className="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full font-medium">
+                {/* ✅ Bigger question count & public badge */}
+                <div className="flex items-center gap-3 text-sm font-bold">
+                    <span className="text-gray-700 text-base font-extrabold">
                         {quiz.questions?.length || 0} Questions
                     </span>
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-semibold
-                        ${quiz.privacy === 'public'
-                            ? 'bg-green-50 text-green-600 border border-green-200'
-                            : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>
+                    <span className="text-gray-300">·</span>
+                    <span className={`text-base font-extrabold ${quiz.privacy === 'public' ? 'text-teal-500' : 'text-gray-400'}`}>
                         {quiz.privacy === 'public' ? '🌐 Public' : '🔒 Private'}
                     </span>
                 </div>
 
                 {quiz.description && (
-                    <p className="text-xs text-slate-400 mb-3 line-clamp-2">{quiz.description}</p>
+                    <p className="text-gray-400 text-xs line-clamp-2">{quiz.description}</p>
                 )}
 
-                {/* Actions */}
+                {/* Play button */}
+                <button
+                    onClick={handlePlay}
+                    disabled={!hasQuestions}
+                    title={!hasQuestions ? 'Add questions first to play' : 'Launch live game'}
+                    className={`w-full flex items-center justify-center gap-2 text-sm font-bold py-2.5 rounded-xl transition-all ${hasQuestions
+                            ? 'bg-purple-600 hover:bg-purple-700 text-white shadow-sm hover:scale-[1.02]'
+                            : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                        }`}
+                >
+                    <Play size={14} className="fill-current" />
+                    {hasQuestions ? 'Play this' : 'No questions yet'}
+                </button>
+
+                {/* Edit / Delete */}
                 {!confirming ? (
                     <div className="flex gap-2">
                         <button
@@ -73,10 +89,8 @@ export default function QuizCard({
                         </button>
                     </div>
                 ) : (
-                    <div className="space-y-2">
-                        <p className="text-xs text-red-500 font-semibold text-center">
-                            Delete this quiz?
-                        </p>
+                    <div className="flex flex-col gap-2">
+                        <p className="text-sm text-red-500 font-semibold text-center">Delete this quiz?</p>
                         <div className="flex gap-2">
                             <button
                                 onClick={() => setConfirming(false)}
@@ -87,7 +101,7 @@ export default function QuizCard({
                             <button
                                 onClick={handleDelete}
                                 disabled={deleting}
-                                className="flex-1 text-sm font-bold text-white bg-red-500 hover:bg-red-600 py-2 rounded-xl disabled:opacity-60"
+                                className="flex-1 bg-red-500 hover:bg-red-600 text-white text-sm font-bold py-2 rounded-xl transition-all"
                             >
                                 {deleting ? 'Deleting...' : 'Yes, Delete'}
                             </button>

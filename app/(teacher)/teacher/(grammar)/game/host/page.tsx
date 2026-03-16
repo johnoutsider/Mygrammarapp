@@ -62,16 +62,31 @@ export default function HostPage() {
         return unsub
     }, [router])
 
-    // ── Listen to game ─────────────────────────────────────────────────────────
+    // ── Listen to game ────────────────────────────────────────────────────────────
     useEffect(() => {
         const unsub = onActiveGame((g) => {
             setGame(g)
             if (!g) { router.push('/teacher/game'); return }
+
             const total = Object.values(g.players || {}) as GamePlayer[]
-            setAnsweredCount(total.filter(p => p.answered).length)
+            const answered = total.filter(p => p.answered).length
+            setAnsweredCount(answered)
+
+            // ✅ Auto-advance: all players answered → skip timer immediately
+            if (
+                g.status === 'question' &&
+                total.length > 0 &&
+                answered >= total.length &&
+                !revealFiredRef.current
+            ) {
+                revealFiredRef.current = true
+                if (timerRef.current) clearInterval(timerRef.current)
+                revealAnswer()
+            }
         })
         return unsub
     }, [router])
+
 
     // ── Load quiz questions ────────────────────────────────────────────────────
     useEffect(() => {
