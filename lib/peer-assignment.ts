@@ -200,3 +200,45 @@ export async function getAssignedEssays(reviewerId: string) {
         return []
     }
 }
+
+type LeastReviewedItem = {
+    reviewCount?: number
+    createdAt?: { toMillis?: () => number; seconds?: number } | null
+    reviewedBy?: string[]
+}
+
+function getCreatedAtMillis(value: LeastReviewedItem['createdAt']): number {
+    if (!value) return 0
+    if (typeof value.toMillis === 'function') return value.toMillis()
+    if (typeof value.seconds === 'number') return value.seconds * 1000
+    return 0
+}
+
+/**
+ * Sorts review candidates so the least-reviewed items are handled first.
+ * Older items win ties to keep the queue stable and fair.
+ */
+export function sortLeastReviewedFirst<T extends LeastReviewedItem>(items: T[]): T[] {
+    return [...items].sort((a, b) => {
+        const reviewDiff = (a.reviewCount ?? 0) - (b.reviewCount ?? 0)
+        if (reviewDiff !== 0) return reviewDiff
+
+        return getCreatedAtMillis(a.createdAt) - getCreatedAtMillis(b.createdAt)
+    })
+}
+
+/**
+ * Returns the next least-reviewed candidate after excluding items already
+ * reviewed by the current user. The caller is responsible for filtering out
+ * any other ineligible items such as the author's own submission.
+ */
+export function pickLeastReviewedQuestion<T extends LeastReviewedItem>(
+    questions: T[],
+    currentUserId: string
+): T | null {
+    const eligible = questions.filter(
+        question => !(question.reviewedBy || []).includes(currentUserId)
+    )
+
+    return sortLeastReviewedFirst(eligible)[0] ?? null
+}
