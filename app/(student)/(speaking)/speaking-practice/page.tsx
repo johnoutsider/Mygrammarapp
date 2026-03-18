@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import StudentLayout from '@/components/StudentLayout'
 import SpeakingCountdownRing from '@/components/speaking/SpeakingCountdownRing'
@@ -15,7 +15,7 @@ function getValidStep(stepParam: string | null, totalSteps: number): number {
     return parsed
 }
 
-export default function SpeakingPracticePage() {
+function SpeakingPracticeContent() {
     useAccessGuard()
 
     const router = useRouter()
@@ -110,7 +110,7 @@ export default function SpeakingPracticePage() {
         <StudentLayout title="Speaking Practice">
             <div className="max-w-5xl mx-auto px-4 py-10 space-y-12">
                 <SpeakingPromptBubble
-                    label={`${assignment.partLabel} � Step ${currentStepIndex + 1} of ${assignment.questionSteps.length}`}
+                    label={`${assignment.partLabel} - Step ${currentStepIndex + 1} of ${assignment.questionSteps.length}`}
                     text={currentStep.text}
                 />
 
@@ -139,5 +139,21 @@ export default function SpeakingPracticePage() {
                 </div>
             </div>
         </StudentLayout>
+    )
+}
+
+export default function SpeakingPracticePage() {
+    return (
+        <Suspense
+            fallback={
+                <StudentLayout title="Speaking Practice">
+                    <div className="min-h-[60vh] flex items-center justify-center">
+                        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#4c75c3]" />
+                    </div>
+                </StudentLayout>
+            }
+        >
+            <SpeakingPracticeContent />
+        </Suspense>
     )
 }
