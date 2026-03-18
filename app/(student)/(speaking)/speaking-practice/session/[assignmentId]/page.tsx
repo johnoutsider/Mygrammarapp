@@ -63,6 +63,23 @@ function getStepIndex(stepParam: string | null, totalSteps: number): number {
     return parsed
 }
 
+async function attachVideoStream(video: HTMLVideoElement, stream: MediaStream): Promise<void> {
+    video.srcObject = stream
+    video.muted = true
+    video.playsInline = true
+
+    try {
+        await video.play()
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        const name = error instanceof DOMException ? error.name : ''
+        const interrupted = name === 'AbortError' || message.includes('interrupted by a new load request')
+        if (!interrupted) {
+            throw error
+        }
+    }
+}
+
 export default function SpeakingSessionPage() {
     useAccessGuard()
 
@@ -334,8 +351,7 @@ export default function SpeakingSessionPage() {
 
                 videoStreamRef.current = videoStream
                 audioStreamRef.current = audioStream
-                videoRef.current.srcObject = videoStream
-                await videoRef.current.play()
+                await attachVideoStream(videoRef.current, videoStream)
 
                 if (window.FaceMesh) {
                     try {
