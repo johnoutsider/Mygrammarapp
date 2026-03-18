@@ -36,6 +36,22 @@ service cloud.firestore {
       allow delete: if request.auth != null; // reviewer OR teacher cascade
     }
 
+    match /speakingAssignments/{assignmentId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+    }
+
+    match /speakingResponses/{responseId} {
+      allow read: if request.auth != null && (
+        resource.data.studentId == request.auth.uid ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher'
+      );
+      allow create: if request.auth != null &&
+        request.resource.data.studentId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
     // Assistant Chats collection — teachers can read and write their own chat histories
     match /assistantChats/{chatId} {
       allow read, update, delete: if request.auth != null && resource.data.userId == request.auth.uid;

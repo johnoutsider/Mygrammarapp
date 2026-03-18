@@ -1,0 +1,504 @@
+'use client'
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
+import Script from 'next/script'
+import StudentLayout from '@/components/StudentLayout'
+import SpeakingCountdownRing from '@/components/speaking/SpeakingCountdownRing'
+import { useAccessGuard } from '@/hooks/useAccessGuard'
+import { getUserProfile } from '@/lib/auth'
+import { auth } from '@/lib/firebase'
+import {
+    getSpeakingAssignmentById,
+    saveSpeakingResponse,
+    SpeakingAssignment,
+    SpeakingQuestionStep,
+} from '@/lib/speakingService'
+
+declare global {
+    interface Window {
+        FaceMesh?: new (config: { locateFile: (file: string) => string }) => {
+            setOptions: (options: Record<string, unknown>) => void
+            onResults: (callback: (results: FaceMeshResults) => void) => void
+            send: (input: { image: HTMLVideoElement }) => Promise<void>
+            close?: () => void
+        }
+    }
+}
+
+type Landmark = { x: number; y: number }
+type FaceMeshResults = { multiFaceLandmarks?: Landmark[][] }
+type LogEntry = { no: number; time: string; event: string; duration: string }
+
+const LEFT_IRIS = [468, 469, 470, 471, 472]
+const RIGHT_IRIS = [473, 474, 475, 476, 477]
+const READING_THRESHOLD = 15
+
+function getAverageY(landmarks: Landmark[], indices: number[]): number {
+    return indices.map(index => landmarks[index].y).reduce((sum, value) => sum + value, 0) / indices.length
+}
+
+function clampRisk(value: number): number {
+    return Math.max(0, Math.min(100, value))
+}
+
+function getRingColor(riskLevel: number, detectionEnabled: boolean): string {
+    if (!detectionEnabled) return '#f59e0b'
+    if (riskLevel >= 60) return '#ef4444'
+    if (riskLevel >= 30) return '#f59e0b'
+    return '#22c55e'
+}
+
+function getRiskLabel(riskLevel: number, detectionEnabled: boolean): string {
+    if (!detectionEnabled) return 'Detection fallback mode'
+    if (riskLevel >= 60) return 'High cheat risk detected'
+    if (riskLevel >= 30) return 'Suspicious behavior detected'
+    return 'Speaking behavior looks normal'
+}
+
+function getStepIndex(stepParam: string | null, totalSteps: number): number {
+    const parsed = Number(stepParam ?? '0')
+    if (!Number.isInteger(parsed) || parsed < 0) return 0
+    if (parsed >= totalSteps) return Math.max(totalSteps - 1, 0)
+    return parsed
+}
+
+export default function SpeakingSessionPage() {
+    useAccessGuard()
+
+    const params = useParams<{ assignmentId: string }>()
+    const searchParams = useSearchParams()
+    const router = useRouter()
+    const videoRef = useRef<HTMLVideoElement | null>(null)
+    const faceMeshRef = useRef<InstanceType<NonNullable<typeof window.FaceMesh>> | null>(null)
+    const frameRequestRef = useRef<number | null>(null)
+    const sessionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+    const micMonitorIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+    const silenceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+    const videoStreamRef = useRef<MediaStream | null>(null)
+    const audioStreamRef = useRef<MediaStream | null>(null)
+    const audioContextRef = useRef<AudioContext | null>(null)
+    const isMicSpeakingRef = useRef(false)
+    const readingFramesRef = useRef(0)
+    const noFaceFramesRef = useRef(0)
+    const idleFramesRef = useRef(0)
+    const warningCountRef = useRef(0)
+    const transcriptChunksRef = useRef<string[]>([])
+    const sessionSecondsRef = useRef(0)
+    const speakingTicksRef = useRef(0)
+    const savedRef = useRef(false)
+    const detectionDisabledRef = useRef(false)
+    const riskLevelRef = useRef(0)
+
+    const [scriptsReady, setScriptsReady] = useState(false)
+    const [assignment, setAssignment] = useState<SpeakingAssignment | null>(null)
+    const [loading, setLoading] = useState(true)
+    const [starting, setStarting] = useState(false)
+    const [status, setStatus] = useState('Preparing camera and microphone...')
+    const [remainingSeconds, setRemainingSeconds] = useState(0)
+    const [warningCount, setWarningCount] = useState(0)
+    const [logs, setLogs] = useState<LogEntry[]>([])
+    const [error, setError] = useState<string | null>(null)
+    const [detectionEnabled, setDetectionEnabled] = useState(true)
+    const [riskLevel, setRiskLevel] = useState(0)
+
+    const stepIndex = useMemo(() => getStepIndex(searchParams.get('step'), assignment?.questionSteps.length ?? 1), [assignment?.questionSteps.length, searchParams])
+    const currentStep: SpeakingQuestionStep | null = assignment?.questionSteps[stepIndex] ?? null
+
+    const addLog = useCallback((event: string, duration = '-') => {
+        const time = new Date().toLocaleTimeString()
+        setLogs(current => [{ no: current.length + 1, time, event, duration }, ...current])
+    }, [])
+
+    const updateRiskLevel = useCallback((nextRisk: number) => {
+        const clamped = clampRisk(nextRisk)
+        riskLevelRef.current = clamped
+        setRiskLevel(clamped)
+    }, [])
+
+    const disableDetection = useCallback((reason: string) => {
+        if (detectionDisabledRef.current) return
+        detectionDisabledRef.current = true
+        setDetectionEnabled(false)
+        faceMeshRef.current?.close?.()
+        faceMeshRef.current = null
+        if (frameRequestRef.current) cancelAnimationFrame(frameRequestRef.current)
+        frameRequestRef.current = null
+        updateRiskLevel(Math.max(riskLevelRef.current, 40))
+        setStatus('Camera is running. Detection fallback mode is active.')
+        addLog(reason)
+    }, [addLog, updateRiskLevel])
+
+    const stopMedia = useCallback(() => {
+        if (frameRequestRef.current) cancelAnimationFrame(frameRequestRef.current)
+        if (sessionIntervalRef.current) clearInterval(sessionIntervalRef.current)
+        if (micMonitorIntervalRef.current) clearInterval(micMonitorIntervalRef.current)
+        if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current)
+        frameRequestRef.current = null
+        sessionIntervalRef.current = null
+        micMonitorIntervalRef.current = null
+        silenceTimeoutRef.current = null
+
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+            mediaRecorderRef.current.stop()
+        }
+
+        faceMeshRef.current?.close?.()
+        faceMeshRef.current = null
+        mediaRecorderRef.current = null
+        videoStreamRef.current?.getTracks().forEach(track => track.stop())
+        audioStreamRef.current?.getTracks().forEach(track => track.stop())
+        videoStreamRef.current = null
+        audioStreamRef.current = null
+
+        if (audioContextRef.current) {
+            void audioContextRef.current.close()
+            audioContextRef.current = null
+        }
+
+        if (videoRef.current) videoRef.current.srcObject = null
+    }, [])
+
+    const saveAndExit = useCallback(async () => {
+        if (!assignment || !currentStep || savedRef.current) return
+        savedRef.current = true
+        stopMedia()
+
+        const currentUser = auth.currentUser
+        if (!currentUser) {
+            router.replace('/dashboard')
+            return
+        }
+
+        try {
+            const profile = await getUserProfile(currentUser.uid)
+            await saveSpeakingResponse({
+                assignmentId: assignment.id,
+                questionText: currentStep.text,
+                questionLabel: `${assignment.partLabel} - Step ${stepIndex + 1} of ${assignment.questionSteps.length}`,
+                partLabel: assignment.partLabel,
+                stepIndex,
+                stepTotal: assignment.questionSteps.length,
+                studentId: currentUser.uid,
+                studentName: profile?.displayName || profile?.name || currentUser.displayName || 'Student',
+                transcript: transcriptChunksRef.current.join(' ').trim(),
+                warningCount: warningCountRef.current,
+                sessionSeconds: sessionSecondsRef.current,
+                speakingSeconds: Math.floor(speakingTicksRef.current / 10),
+                logs: logs.slice().reverse(),
+            })
+
+            if (stepIndex + 1 < assignment.questionSteps.length) {
+                router.replace(`/speaking-practice?assignmentId=${assignment.id}&step=${stepIndex + 1}`)
+                return
+            }
+
+            router.replace('/speaking-log')
+        } catch (saveError) {
+            console.error(saveError)
+            setError('Failed to save your speaking response.')
+        }
+    }, [assignment, currentStep, logs, router, stepIndex, stopMedia])
+
+    const sendToGroq = useCallback(async (audioBlob: Blob) => {
+        try {
+            const formData = new FormData()
+            formData.append('audio', audioBlob, 'recording.webm')
+
+            const response = await fetch('/api/speaking/transcribe', {
+                method: 'POST',
+                body: formData,
+            })
+            const data = await response.json()
+            if (!response.ok) throw new Error(data?.error || 'Transcription failed.')
+
+            const text = typeof data?.text === 'string' ? data.text.trim() : ''
+            if (!text) return
+
+            transcriptChunksRef.current.push(text)
+            addLog('Transcript chunk captured', `${text.split(/\s+/).length} words`)
+        } catch (transcribeError) {
+            console.error(transcribeError)
+            addLog('Transcription failed')
+        }
+    }, [addLog])
+
+    const handleFaceMeshResults = useCallback((results: FaceMeshResults) => {
+        if (detectionDisabledRef.current) return
+
+        const faces = results.multiFaceLandmarks || []
+
+        if (faces.length === 0) {
+            noFaceFramesRef.current += 1
+            idleFramesRef.current += 1
+            updateRiskLevel(riskLevelRef.current + 4)
+            if (noFaceFramesRef.current === 20) {
+                setStatus('No face detected.')
+                addLog('Student left camera')
+            }
+            return
+        }
+
+        if (faces.length > 1) {
+            updateRiskLevel(100)
+            setStatus('Multiple people detected.')
+            addLog('Multiple faces detected')
+            return
+        }
+
+        noFaceFramesRef.current = 0
+        const landmarks = faces[0]
+        const avgIrisY = (getAverageY(landmarks, LEFT_IRIS) + getAverageY(landmarks, RIGHT_IRIS)) / 2
+        const eyeCenter = (landmarks[159].y + landmarks[145].y) / 2
+        const lookingDown = avgIrisY > eyeCenter + 0.01
+        const headTiltDown = (landmarks[152].y - landmarks[1].y) < 0.22
+        const lipMoving = Math.abs(landmarks[14].y - landmarks[13].y) > 0.02
+        const isSpeaking = lipMoving || isMicSpeakingRef.current
+        const isReading = lookingDown || headTiltDown
+
+        if (isReading) {
+            idleFramesRef.current = 0
+            readingFramesRef.current += 1
+            updateRiskLevel(riskLevelRef.current + 6)
+            if (readingFramesRef.current === READING_THRESHOLD) {
+                warningCountRef.current += 1
+                setWarningCount(warningCountRef.current)
+                setStatus('Warning: you seem to be reading.')
+                addLog('Reading detected')
+            }
+            return
+        }
+
+        readingFramesRef.current = 0
+        if (isSpeaking) {
+            idleFramesRef.current = 0
+            speakingTicksRef.current += 1
+            updateRiskLevel(riskLevelRef.current - 5)
+            setStatus('Speaking in progress...')
+            return
+        }
+
+        idleFramesRef.current += 1
+        const idleRiskBoost = idleFramesRef.current > 40 ? 3 : 1
+        updateRiskLevel(riskLevelRef.current + idleRiskBoost)
+        setStatus('Looking at camera but not speaking.')
+    }, [addLog, updateRiskLevel])
+
+    useEffect(() => {
+        const loadAssignment = async () => {
+            try {
+                const nextAssignment = await getSpeakingAssignmentById(params.assignmentId)
+                if (!nextAssignment) {
+                    setError('Speaking prompt not found.')
+                    return
+                }
+                setAssignment(nextAssignment)
+                setRemainingSeconds(nextAssignment.speakingSeconds)
+            } catch (loadError) {
+                console.error(loadError)
+                setError('Failed to load the speaking session.')
+            } finally {
+                setLoading(false)
+            }
+        }
+
+        void loadAssignment()
+    }, [params.assignmentId])
+
+    useEffect(() => {
+        if (!assignment) return
+        setRemainingSeconds(assignment.speakingSeconds)
+    }, [assignment, stepIndex])
+
+    useEffect(() => {
+        if (!assignment || !currentStep || !scriptsReady || loading) return
+
+        const startSession = async () => {
+            if (!videoRef.current) return
+            setStarting(true)
+            detectionDisabledRef.current = false
+            setDetectionEnabled(true)
+            updateRiskLevel(0)
+            readingFramesRef.current = 0
+            noFaceFramesRef.current = 0
+            idleFramesRef.current = 0
+            warningCountRef.current = 0
+            setWarningCount(0)
+
+            try {
+                const [videoStream, audioStream] = await Promise.all([
+                    navigator.mediaDevices.getUserMedia({ video: true }),
+                    navigator.mediaDevices.getUserMedia({ audio: true }),
+                ])
+
+                videoStreamRef.current = videoStream
+                audioStreamRef.current = audioStream
+                videoRef.current.srcObject = videoStream
+                await videoRef.current.play()
+
+                if (window.FaceMesh) {
+                    try {
+                        const faceMesh = new window.FaceMesh({
+                            locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
+                        })
+                        faceMesh.setOptions({
+                            maxNumFaces: 2,
+                            refineLandmarks: true,
+                            minDetectionConfidence: 0.5,
+                            minTrackingConfidence: 0.5,
+                        })
+                        faceMesh.onResults(handleFaceMeshResults)
+                        faceMeshRef.current = faceMesh
+
+                        const loop = async () => {
+                            if (!videoRef.current || !faceMeshRef.current || detectionDisabledRef.current) return
+                            try {
+                                if (videoRef.current.readyState < 2 || videoRef.current.videoWidth === 0 || videoRef.current.videoHeight === 0) {
+                                    frameRequestRef.current = requestAnimationFrame(() => { void loop() })
+                                    return
+                                }
+
+                                await faceMeshRef.current.send({ image: videoRef.current })
+                                frameRequestRef.current = requestAnimationFrame(() => { void loop() })
+                            } catch (faceMeshError) {
+                                console.error(faceMeshError)
+                                disableDetection('Face detection fallback activated')
+                            }
+                        }
+
+                        frameRequestRef.current = requestAnimationFrame(() => { void loop() })
+                    } catch (faceMeshInitError) {
+                        console.error(faceMeshInitError)
+                        disableDetection('Face detection could not be started')
+                    }
+                } else {
+                    disableDetection('Face detection script did not load')
+                }
+
+                const audioContext = new AudioContext()
+                audioContextRef.current = audioContext
+                const analyser = audioContext.createAnalyser()
+                const source = audioContext.createMediaStreamSource(audioStream)
+                source.connect(analyser)
+                analyser.fftSize = 512
+                const dataArray = new Uint8Array(analyser.frequencyBinCount)
+
+                micMonitorIntervalRef.current = setInterval(() => {
+                    analyser.getByteFrequencyData(dataArray)
+                    const volume = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length
+                    isMicSpeakingRef.current = volume > 10
+
+                    if (!isMicSpeakingRef.current && !silenceTimeoutRef.current) {
+                        silenceTimeoutRef.current = setTimeout(() => {
+                            updateRiskLevel(riskLevelRef.current + 8)
+                            addLog('Long silence detected')
+                            silenceTimeoutRef.current = null
+                        }, 3000)
+                    } else if (isMicSpeakingRef.current && silenceTimeoutRef.current) {
+                        clearTimeout(silenceTimeoutRef.current)
+                        silenceTimeoutRef.current = null
+                    }
+                }, 100)
+
+                if (typeof MediaRecorder !== 'undefined') {
+                    const recorder = new MediaRecorder(audioStream)
+                    mediaRecorderRef.current = recorder
+                    recorder.ondataavailable = event => {
+                        if (event.data.size > 0) {
+                            void sendToGroq(event.data)
+                        }
+                    }
+                    recorder.start(10000)
+                }
+
+                sessionIntervalRef.current = setInterval(() => {
+                    sessionSecondsRef.current += 1
+                    setRemainingSeconds(current => {
+                        if (current <= 1) {
+                            void saveAndExit()
+                            return 0
+                        }
+                        return current - 1
+                    })
+                }, 1000)
+
+                addLog('Speaking session started')
+                setStatus('Speaking in progress...')
+            } catch (startError) {
+                console.error(startError)
+                setError(`Failed to start the speaking session: ${(startError as Error).message}`)
+                stopMedia()
+            } finally {
+                setStarting(false)
+            }
+        }
+
+        void startSession()
+
+        return () => {
+            stopMedia()
+        }
+    }, [addLog, assignment, currentStep, disableDetection, handleFaceMeshResults, loading, saveAndExit, scriptsReady, sendToGroq, stepIndex, stopMedia, updateRiskLevel])
+
+    if (loading) {
+        return (
+            <StudentLayout title="Speaking Session">
+                <div className="min-h-[60vh] flex items-center justify-center">
+                    <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#4c75c3]" />
+                </div>
+            </StudentLayout>
+        )
+    }
+
+    return (
+        <StudentLayout title="Speaking Session">
+            <Script
+                src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"
+                strategy="afterInteractive"
+                onLoad={() => setScriptsReady(true)}
+                onError={() => {
+                    setScriptsReady(true)
+                    setDetectionEnabled(false)
+                }}
+            />
+
+            <div className="max-w-6xl mx-auto px-4 py-10 space-y-10">
+                {error && (
+                    <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">{error}</div>
+                )}
+
+                <div className="text-center space-y-3">
+                    <div className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">
+                        {assignment?.partLabel || 'Speaking'} - Step {stepIndex + 1} of {assignment?.questionSteps.length || 1}
+                    </div>
+                    <h1 className="text-4xl font-bold text-slate-900">
+                        {currentStep?.text || (starting ? 'Starting your speaking timer...' : 'Answer the question clearly and naturally')}
+                    </h1>
+                    <p className="text-base text-slate-500">{status}</p>
+                    <p className={`text-sm font-semibold ${riskLevel >= 60 ? 'text-red-600' : riskLevel >= 30 ? 'text-amber-600' : 'text-green-600'}`}>
+                        {getRiskLabel(riskLevel, detectionEnabled)}
+                    </p>
+                </div>
+
+                <div className="flex justify-center">
+                    <SpeakingCountdownRing
+                        remainingSeconds={remainingSeconds}
+                        totalSeconds={assignment?.speakingSeconds || 1}
+                        label={`Step ${stepIndex + 1} Countdown`}
+                        sublabel={`Detection risk: ${riskLevel}%`}
+                        ringColor={getRingColor(riskLevel, detectionEnabled)}
+                        showCenterTime={false}
+                        size={460}
+                        strokeWidth={30}
+                        centerContent={
+                            <div className="h-[330px] w-[330px] rounded-full overflow-hidden border-[8px] border-white bg-slate-950 shadow-inner">
+                                <video ref={videoRef} className="w-full h-full object-cover" autoPlay muted playsInline />
+                            </div>
+                        }
+                    />
+                </div>
+            </div>
+        </StudentLayout>
+    )
+}

@@ -22,7 +22,8 @@ export interface UserProfile {
     classId: string          // single class per student, 'default-class' until assigned
     groupId?: string         // group within the class (for access control)
     groupName?: string
-    accessMode?: 'both' | 'writing' | 'grammar'  // derived from group
+    profileGroupName?: string
+    accessMode?: 'both' | 'writing' | 'grammar' | 'speaking'  // derived from group
 
     // ── Teacher fields ──
     classIds?: string[]      // teacher can manage multiple classes

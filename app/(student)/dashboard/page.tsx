@@ -29,7 +29,7 @@ export default function Dashboard() {
     })
 
     const { accessMode, loading: accessLoading } = useAccessMode()
-    const { showWriting, showGrammar } = getVisibleGroups(accessMode)
+    const { showWriting, showGrammar, showSpeaking } = getVisibleGroups(accessMode)
 
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -125,7 +125,9 @@ export default function Dashboard() {
         ? "Here's your writing and grammar overview"
         : accessMode === 'writing'
             ? "Here's your writing progress"
-            : "Here's your grammar game progress"
+            : accessMode === 'grammar'
+                ? "Here's your grammar game progress"
+                : "Here's your speaking practice space"
 
     const accuracyColor = accuracy >= 70
         ? { bar: 'bg-emerald-500', text: 'text-emerald-600', label: '🔥 Great' }
@@ -165,9 +167,11 @@ export default function Dashboard() {
                 )}
 
                 {/* ── Stats Cards ── */}
-                {(showWriting || showGrammar) && (
+                {(showWriting || showGrammar || showSpeaking) && (
                     <div className={`grid gap-4 md:gap-6 mb-8 ${showWriting && showGrammar
                         ? 'grid-cols-1 sm:grid-cols-3'
+                        : showSpeaking
+                            ? 'grid-cols-1'
                         : 'grid-cols-1 sm:grid-cols-2'
                         }`}>
 
@@ -231,6 +235,14 @@ export default function Dashboard() {
                                 </div>
                             </>
                         )}
+
+                        {showSpeaking && (
+                            <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+                                <div className="text-4xl mb-3">🎤</div>
+                                <div className="text-2xl font-bold text-slate-900 mb-1">Speaking Class</div>
+                                <div className="text-slate-700 font-medium">Camera, microphone, transcript, and warning monitor</div>
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -282,6 +294,23 @@ export default function Dashboard() {
                                     <div className="text-3xl mb-2">📈</div>
                                     <h3 className="text-xl font-bold mb-1">Grammar Progress</h3>
                                     <p className="text-slate-600 text-sm">Track your game scores and streaks</p>
+                                </Link>
+                            </>
+                        )}
+
+                        {showSpeaking && (
+                            <>
+                                <Link href="/speaking-practice"
+                                    className="bg-white border border-slate-200 text-slate-900 p-6 rounded-lg hover:border-amber-500 hover:shadow-md transition-all text-left flex flex-col justify-center">
+                                    <div className="text-3xl mb-2">🎤</div>
+                                    <h3 className="text-xl font-bold mb-1">Start Speaking Practice</h3>
+                                    <p className="text-slate-600 text-sm">Read the active question, prepare, and move into the timed speaking session.</p>
+                                </Link>
+                                <Link href="/speaking-log"
+                                    className="bg-white border border-slate-200 text-slate-900 p-6 rounded-lg hover:border-sky-500 hover:shadow-md transition-all text-left flex flex-col justify-center">
+                                    <div className="text-3xl mb-2">🗂️</div>
+                                    <h3 className="text-xl font-bold mb-1">My Speaking Log</h3>
+                                    <p className="text-slate-600 text-sm">Review the questions you answered and the transcript captured for each response.</p>
                                 </Link>
                             </>
                         )}

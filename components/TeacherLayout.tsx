@@ -72,6 +72,35 @@ const navGroups = [
         ]
     },
     {
+        key: 'speaking',
+        label: 'Speaking',
+        icon: (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-5 h-5">
+                <path d="M12 14a3 3 0 003-3V7a3 3 0 10-6 0v4a3 3 0 003 3z" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M19 11a7 7 0 01-14 0M12 18v3M8 21h8" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+        ),
+        links: [
+            {
+                href: '/teacher/speaking', label: 'Speaking Practice', icon: (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
+                        <path d="M12 14a3 3 0 003-3V7a3 3 0 10-6 0v4a3 3 0 003 3z" strokeLinecap="round" strokeLinejoin="round" />
+                        <path d="M19 11a7 7 0 01-14 0M12 18v3M8 21h8" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                )
+            },
+            {
+                href: '/teacher/speaking/logs', label: 'Student Logs', icon: (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
+                        <path d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2" strokeLinecap="round" strokeLinejoin="round" />
+                        <rect x="9" y="3" width="6" height="4" rx="1" />
+                        <path d="M9 12h6M9 16h4" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                )
+            },
+        ]
+    },
+    {
         key: 'tools',
         label: 'Tools',
         icon: (
@@ -172,6 +201,7 @@ export default function TeacherLayout({ children, title = 'Teacher Panel' }: Tea
     const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
         writing: true,
         grammar: true,
+        speaking: true,
         tools: true,
     })
 

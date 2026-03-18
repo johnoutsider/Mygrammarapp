@@ -36,7 +36,7 @@ export default function Profile() {
                 if (snap.exists()) {
                     const data = snap.data() as any
                     setDisplayName(data.displayName || data.name || '')
-                    setGroupName(data.groupName || '')
+                    setGroupName(data.profileGroupName || data.groupName || '')
                     if (data.role) setRole(data.role)
                     if (data.telegramChatId) {
                         setTelegramLinked(true)
@@ -142,7 +142,7 @@ export default function Profile() {
         try {
             await setDoc(doc(db, 'users', auth.currentUser.uid), {
                 displayName: displayName.trim() || googleName,
-                groupName: groupName.trim(),
+                profileGroupName: groupName.trim(),
             }, { merge: true })
             setSuccess('Profile saved successfully!')
             setTimeout(() => setSuccess(null), 3000)

@@ -17,7 +17,7 @@ import { db } from '@/lib/firebase'
 // Types
 // ─────────────────────────────────────────────
 
-export type AccessMode = 'both' | 'writing' | 'grammar'
+export type AccessMode = 'both' | 'writing' | 'grammar' | 'speaking'
 
 export interface Group {
     id: string
@@ -33,6 +33,7 @@ export interface StudentProfile {
     email?: string
     groupId?: string
     groupName?: string
+    profileGroupName?: string
     accessMode: AccessMode
     role?: string
 }

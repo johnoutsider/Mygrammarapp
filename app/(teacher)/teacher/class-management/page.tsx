@@ -160,7 +160,14 @@ export default function ClassManagementPage() {
     // ── Filtered students ─────────────────────────────────────────────────────
 
     const filtered = students.filter(s => {
-        const matchSearch = (s.displayName || s.name || s.email || '').toLowerCase().includes(search.toLowerCase())
+        const profileGroup = s.profileGroupName || (!s.groupId ? s.groupName : '') || ''
+        const searchHaystack = [
+            s.displayName || s.name || '',
+            s.email || '',
+            profileGroup,
+            s.groupName || '',
+        ].join(' ').toLowerCase()
+        const matchSearch = searchHaystack.includes(search.toLowerCase())
         const matchGroup =
             filterGroup === 'all' ? true :
                 filterGroup === 'unassigned' ? !s.groupId :
@@ -233,8 +240,8 @@ export default function ClassManagementPage() {
                                 </div>
 
                                 {/* Access toggle */}
-                                <div className="flex gap-1 mb-3">
-                                    {(['writing', 'grammar', 'both'] as AccessMode[]).map(mode => (
+                                <div className="flex gap-1 mb-3 flex-wrap">
+                                    {(['writing', 'grammar', 'speaking', 'both'] as AccessMode[]).map(mode => (
                                         <button key={mode}
                                             onClick={() => handleUpdateGroupAccess(group.id, mode)}
                                             className={`text-xs px-2 py-0.5 rounded-full font-medium transition-all capitalize
@@ -295,6 +302,7 @@ export default function ClassManagementPage() {
                             <option value="both">Both</option>
                             <option value="writing">Writing</option>
                             <option value="grammar">Grammar</option>
+                            <option value="speaking">Speaking</option>
                         </select>
 
                         <span className="text-xs text-slate-400 ml-auto">{filtered.length} student{filtered.length !== 1 ? 's' : ''}</span>
@@ -312,6 +320,7 @@ export default function ClassManagementPage() {
                                     <tr className="text-left text-xs font-semibold text-slate-400  uppercase tracking-wider bg-slate-50">
                                         <th className="px-5 py-3">Name</th>
                                         <th className="px-5 py-3">Group</th>
+                                        <th className="px-5 py-3">Profile Group</th>
                                         <th className="px-5 py-3">Access</th>
                                         <th className="px-5 py-3">Status</th>
                                     </tr>
@@ -321,6 +330,7 @@ export default function ClassManagementPage() {
                                         const isUnassigned = !student.groupId
                                         const isSaving = savingStudent === student.uid
                                         const name = student.displayName || student.name || student.email || 'Unknown'
+                                        const profileGroup = student.profileGroupName || (!student.groupId ? student.groupName : '') || ''
 
                                         return (
                                             <tr key={student.uid}
@@ -361,6 +371,17 @@ export default function ClassManagementPage() {
                                                             <div className="w-4 h-4 border-2 border-[#1a9aaa] border-t-transparent rounded-full animate-spin" />
                                                         )}
                                                     </div>
+                                                </td>
+
+                                                {/* Profile group from student profile */}
+                                                <td className="px-5 py-3.5">
+                                                    {profileGroup ? (
+                                                        <span className="inline-flex items-center text-xs font-medium text-slate-700 bg-slate-100 px-2.5 py-1 rounded-full">
+                                                            {profileGroup}
+                                                        </span>
+                                                    ) : (
+                                                        <span className="text-xs text-slate-400">No profile group</span>
+                                                    )}
                                                 </td>
 
                                                 {/* Access badge */}
@@ -420,10 +441,11 @@ export default function ClassManagementPage() {
                             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 block">
                                 Access
                             </label>
-                            <div className="grid grid-cols-3 gap-2">
+                            <div className="grid grid-cols-2 gap-2">
                                 {([
                                     { value: 'writing', label: 'Writing', color: 'blue' },
                                     { value: 'grammar', label: 'Grammar', color: 'violet' },
+                                    { value: 'speaking', label: 'Speaking', color: 'amber' },
                                     { value: 'both', label: 'Both', color: 'green' },
                                 ] as { value: AccessMode, label: string, color: string }[]).map(opt => (
                                     <button key={opt.value}

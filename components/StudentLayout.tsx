@@ -114,6 +114,25 @@ const grammarLinks = [
     },
 ]
 
+const speakingLinks = [
+    {
+        href: '/speaking-practice', label: 'Speaking Practice', icon: (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
+                <path d="M12 14a3 3 0 003-3V7a3 3 0 10-6 0v4a3 3 0 003 3z" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M19 11a7 7 0 01-14 0M12 18v3M8 21h8" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+        )
+    },
+    {
+        href: '/speaking-log', label: 'Speaking Log', icon: (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
+                <path d="M8 7h8M8 12h8M8 17h5" strokeLinecap="round" />
+                <path d="M6 3h9l3 3v15a1 1 0 01-1 1H6a1 1 0 01-1-1V4a1 1 0 011-1z" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+        )
+    },
+]
+
 // Always-visible standalone links
 const standaloneLinks = [
     {
@@ -147,10 +166,10 @@ export default function StudentLayout({ children, title = 'Dashboard' }: Student
 
     // Access mode from Firestore (real-time)
     const { accessMode, loading: accessLoading } = useAccessMode()
-    const { showWriting, showGrammar } = getVisibleGroups(accessMode)
+    const { showWriting, showGrammar, showSpeaking } = getVisibleGroups(accessMode)
 
     // Track which groups are open
-    const [openGroups, setOpenGroups] = useState({ writing: true, grammar: true })
+    const [openGroups, setOpenGroups] = useState({ writing: true, grammar: true, speaking: true })
 
     const isActive = (href: string) => {
         if (href === '/dashboard') return pathname === '/dashboard'
@@ -161,11 +180,13 @@ export default function StudentLayout({ children, title = 'Dashboard' }: Student
     useEffect(() => {
         const writingActive = writingLinks.some(l => pathname.startsWith(l.href))
         const grammarActive = grammarLinks.some(l => pathname.startsWith(l.href))
+        const speakingActive = speakingLinks.some(l => pathname.startsWith(l.href))
         if (writingActive) setOpenGroups(prev => ({ ...prev, writing: true }))
         if (grammarActive) setOpenGroups(prev => ({ ...prev, grammar: true }))
+        if (speakingActive) setOpenGroups(prev => ({ ...prev, speaking: true }))
     }, [pathname])
 
-    const toggleGroup = (key: 'writing' | 'grammar') => {
+    const toggleGroup = (key: 'writing' | 'grammar' | 'speaking') => {
         if (sidebarCollapsed) return
         setOpenGroups(prev => ({ ...prev, [key]: !prev[key] }))
     }
@@ -343,6 +364,57 @@ export default function StudentLayout({ children, title = 'Dashboard' }: Student
                                 {!sidebarCollapsed && openGroups.grammar && (
                                     <ul className="mt-0.5 ml-3 pl-3 space-y-0.5 border-l border-white/10">
                                         {grammarLinks.map(({ href, label, icon }) => (
+                                            <li key={href}>
+                                                <NavLink href={href} label={label} icon={icon} active={isActive(href)} collapsed={false} small />
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </li>
+                        )}
+
+                        {/* Speaking Group */}
+                        {showSpeaking && !accessLoading && (
+                            <li className="mt-1">
+                                <button
+                                    onClick={() => toggleGroup('speaking')}
+                                    title={sidebarCollapsed ? 'Speaking' : undefined}
+                                    className={`
+                                        w-full flex items-center gap-3 px-3 py-2.5 rounded-lg
+                                        transition-all duration-150 group relative
+                                        ${speakingLinks.some(l => isActive(l.href))
+                                            ? 'text-white'
+                                            : 'text-gray-400 hover:text-white hover:bg-white/8'}
+                                    `}
+                                    style={speakingLinks.some(l => isActive(l.href)) ? {
+                                        background: 'rgba(26,154,170,0.12)',
+                                        borderLeft: '3px solid #1a9aaa',
+                                        paddingLeft: '9px'
+                                    } : { borderLeft: '3px solid transparent' }}
+                                >
+                                    <span className={`shrink-0 ${speakingLinks.some(l => isActive(l.href)) ? 'text-[#1a9aaa]' : 'text-gray-500 group-hover:text-gray-300'}`}>
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-5 h-5">
+                                            <path d="M12 14a3 3 0 003-3V7a3 3 0 10-6 0v4a3 3 0 003 3z" strokeLinecap="round" strokeLinejoin="round" />
+                                            <path d="M19 11a7 7 0 01-14 0M12 18v3M8 21h8" strokeLinecap="round" strokeLinejoin="round" />
+                                        </svg>
+                                    </span>
+                                    {!sidebarCollapsed && (
+                                        <>
+                                            <span className="text-sm font-semibold flex-1 text-left">Speaking</span>
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+                                                className={`w-3.5 h-3.5 shrink-0 transition-transform duration-200 ${openGroups.speaking ? 'rotate-180' : ''}`}>
+                                                <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+                                            </svg>
+                                        </>
+                                    )}
+                                    {sidebarCollapsed && (
+                                        <span className="absolute left-full ml-2 px-2 py-1 text-xs font-medium text-white rounded-md opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity whitespace-nowrap z-50"
+                                            style={{ background: '#1a9aaa' }}>Speaking</span>
+                                    )}
+                                </button>
+                                {!sidebarCollapsed && openGroups.speaking && (
+                                    <ul className="mt-0.5 ml-3 pl-3 space-y-0.5 border-l border-white/10">
+                                        {speakingLinks.map(({ href, label, icon }) => (
                                             <li key={href}>
                                                 <NavLink href={href} label={label} icon={icon} active={isActive(href)} collapsed={false} small />
                                             </li>
