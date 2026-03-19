@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server'
 
-const GROQ_TRANSCRIPTION_MODEL = 'whisper-large-v3-turbo'
+const OPENAI_TRANSCRIPTION_MODEL = 'gpt-4o-mini-transcribe'
 
 export async function POST(request: Request) {
     try {
-        const apiKey = process.env.GROQ_API_KEY
+        const apiKey = process.env.OPENAI_API_KEY
         if (!apiKey) {
             return NextResponse.json(
-                { error: 'GROQ_API_KEY is not configured.' },
+                { error: 'OPENAI_API_KEY is not configured.' },
                 { status: 500 }
             )
         }
@@ -24,11 +24,11 @@ export async function POST(request: Request) {
 
         const upstream = new FormData()
         upstream.append('file', audio, audio.name || 'recording.webm')
-        upstream.append('model', GROQ_TRANSCRIPTION_MODEL)
+        upstream.append('model', OPENAI_TRANSCRIPTION_MODEL)
         upstream.append('language', 'en')
         upstream.append('response_format', 'json')
 
-        const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+        const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
             method: 'POST',
             headers: {
                 Authorization: `Bearer ${apiKey}`,
