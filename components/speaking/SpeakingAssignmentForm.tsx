@@ -12,7 +12,7 @@ interface SpeakingAssignmentFormProps {
 }
 
 export default function SpeakingAssignmentForm({ onSubmit }: SpeakingAssignmentFormProps) {
-    const [partLabel, setPartLabel] = useState('Part 1')
+    const [partLabel, setPartLabel] = useState('')
     const [questionsText, setQuestionsText] = useState('')
     const [prepSeconds, setPrepSeconds] = useState(60)
     const [speakingSeconds, setSpeakingSeconds] = useState(120)
@@ -39,7 +39,7 @@ export default function SpeakingAssignmentForm({ onSubmit }: SpeakingAssignmentF
 
         try {
             await onSubmit({
-                partLabel: partLabel.trim() || 'Part 1',
+                partLabel: partLabel.trim() || 'Speaking',
                 questionSteps: parsedQuestions,
                 prepSeconds,
                 speakingSeconds,
@@ -56,7 +56,7 @@ export default function SpeakingAssignmentForm({ onSubmit }: SpeakingAssignmentF
         <form onSubmit={handleSubmit} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-5">
             <div>
                 <h2 className="text-xl font-bold text-slate-800">Create Speaking Prompt</h2>
-                <p className="text-sm text-slate-500 mt-1">Add linked questions in order. Students will receive them step by step.</p>
+                <p className="text-sm text-slate-500 mt-1">Enter a topic and add linked questions in order. Students will answer them step by step.</p>
             </div>
 
             {error && (
@@ -65,20 +65,22 @@ export default function SpeakingAssignmentForm({ onSubmit }: SpeakingAssignmentF
                 </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="md:col-span-1">
-                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Part Label</label>
-                    <input
-                        type="text"
-                        value={partLabel}
-                        onChange={event => setPartLabel(event.target.value)}
-                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-400"
-                        style={{ backgroundColor: '#ffffff', color: '#334155', colorScheme: 'light' }}
-                        placeholder="Part 1"
-                    />
-                </div>
+            <div>
+                <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Topic</label>
+                <input
+                    type="text"
+                    value={partLabel}
+                    onChange={event => setPartLabel(event.target.value)}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-400"
+                    style={{ backgroundColor: '#ffffff', color: '#334155', colorScheme: 'light' }}
+                    placeholder="e.g. IELTS Part 1 — Daily Life"
+                    required
+                />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Prep Seconds</label>
+                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Prep Time (seconds)</label>
                     <input
                         type="number"
                         min={0}
@@ -90,7 +92,7 @@ export default function SpeakingAssignmentForm({ onSubmit }: SpeakingAssignmentF
                     />
                 </div>
                 <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Speaking Seconds</label>
+                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Speaking Time (seconds)</label>
                     <input
                         type="number"
                         min={1}

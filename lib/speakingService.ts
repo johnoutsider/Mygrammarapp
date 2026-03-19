@@ -288,10 +288,13 @@ export async function saveSpeakingResponse(input: Omit<SpeakingResponse, 'id' | 
 
     const speakingResponses = [response, ...((userData.speakingResponses ?? []).map(normalizeResponse).filter((item): item is SpeakingResponse => Boolean(item)))]
 
+    // Firestore rejects `undefined` values — strip them via JSON round-trip
+    const sanitized = JSON.parse(JSON.stringify(speakingResponses)) as SpeakingResponse[]
+
     if (userSnapshot.exists()) {
-        await updateDoc(userRef, { speakingResponses })
+        await updateDoc(userRef, { speakingResponses: sanitized })
     } else {
-        await setDoc(userRef, { speakingResponses }, { merge: true })
+        await setDoc(userRef, { speakingResponses: sanitized }, { merge: true })
     }
 
     return response

@@ -135,132 +135,161 @@ export default function TeacherSpeakingLogsPage() {
                         No speaking responses found.
                     </div>
                 ) : (
-                    <div className="space-y-4">
-                        {filteredRows.map(row => {
-                            const expanded = expandedId === row.id
-                            return (
-                                <div key={`${row.studentId}-${row.id}`} className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-                                    <button
-                                        type="button"
-                                        onClick={() => setExpandedId(expanded ? null : row.id)}
-                                        className="w-full text-left px-5 py-5 hover:bg-slate-50 transition-colors"
-                                    >
-                                        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-                                            <div className="space-y-2 min-w-0">
-                                                <div className="flex items-center gap-3 flex-wrap">
-                                                    <span className="text-sm font-semibold text-slate-900">{row.studentName}</span>
-                                                    {row.studentGroup && (
-                                                        <span className="rounded-full bg-violet-50 text-violet-700 px-3 py-1 text-xs font-semibold">{row.studentGroup}</span>
-                                                    )}
-                                                    {row.questionLabel && (
-                                                        <span className="rounded-full bg-blue-50 text-blue-700 px-3 py-1 text-xs font-semibold">{row.questionLabel}</span>
-                                                    )}
-                                                </div>
-                                                <div className="text-sm text-slate-500">{row.studentEmail || 'No email saved'} • {formatCreatedAt(row.createdAt)}</div>
-                                                <div className="text-lg text-slate-900 line-clamp-2">{row.questionText}</div>
-                                                <div className="text-sm text-slate-500 line-clamp-2">{row.transcript || 'No transcript captured.'}</div>
-                                            </div>
-                                            <div className="flex flex-col items-start lg:items-end gap-2 shrink-0">
+                    <>
+                        {/* ── Data table ── */}
+                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                            <table className="w-full text-sm">
+                                <thead>
+                                    <tr className="border-b border-slate-100 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                                        <th className="px-5 py-3 text-left">Topic</th>
+                                        <th className="px-5 py-3 text-left">Student</th>
+                                        <th className="px-5 py-3 text-left hidden md:table-cell">Question</th>
+                                        <th className="px-5 py-3 text-left hidden lg:table-cell">Date</th>
+                                        <th className="px-5 py-3 text-left hidden lg:table-cell">AI Band</th>
+                                        <th className="px-5 py-3 text-right">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {filteredRows.map(row => (
+                                        <tr key={`${row.studentId}-${row.id}`} className="hover:bg-slate-50 transition-colors">
+                                            <td className="px-5 py-4 align-top">
+                                                <span className="rounded-full bg-teal-50 text-teal-700 px-2.5 py-1 text-xs font-semibold whitespace-nowrap">
+                                                    {row.partLabel || '-'}
+                                                </span>
+                                            </td>
+                                            <td className="px-5 py-4 align-top">
+                                                <div className="font-semibold text-slate-900">{row.studentName}</div>
+                                                {row.studentGroup && (
+                                                    <div className="text-xs text-slate-400 mt-0.5">{row.studentGroup}</div>
+                                                )}
+                                            </td>
+                                            <td className="px-5 py-4 align-top hidden md:table-cell max-w-xs">
+                                                <div className="text-slate-700 line-clamp-2">{row.questionText}</div>
+                                                {row.questionLabel && (
+                                                    <div className="text-xs text-slate-400 mt-0.5">{row.questionLabel}</div>
+                                                )}
+                                            </td>
+                                            <td className="px-5 py-4 align-top hidden lg:table-cell whitespace-nowrap text-slate-500 text-xs">
+                                                {formatCreatedAt(row.createdAt)}
+                                            </td>
+                                            <td className="px-5 py-4 align-top hidden lg:table-cell">
                                                 {row.aiAnalysis ? (
-                                                    <span className={`rounded-full border px-3 py-1 text-sm font-semibold ${scoreColor(row.aiAnalysis.overallBand)}`}>
-                                                        AI Band {row.aiAnalysis.overallBand}
+                                                    <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${scoreColor(row.aiAnalysis.overallBand)}`}>
+                                                        Band {row.aiAnalysis.overallBand}
                                                     </span>
                                                 ) : (
-                                                    <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-sm font-semibold text-slate-500">
-                                                        Not analyzed
-                                                    </span>
+                                                    <span className="text-xs text-slate-400">—</span>
                                                 )}
-                                                <div className="text-xs text-slate-400">{row.warningCount} warning{row.warningCount !== 1 ? 's' : ''}</div>
+                                            </td>
+                                            <td className="px-5 py-4 align-top text-right">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setExpandedId(expandedId === row.id ? null : row.id)}
+                                                    className="px-3 py-1.5 rounded-lg bg-[#1a9aaa] hover:bg-[#127080] text-white text-xs font-semibold transition-colors"
+                                                >
+                                                    {expandedId === row.id ? 'Close' : 'View'}
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {/* ── Detail panel ── */}
+                        {expandedId && (() => {
+                            const row = filteredRows.find(r => r.id === expandedId)
+                            if (!row) return null
+                            return (
+                                <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-6 space-y-5">
+                                    <div className="flex items-start justify-between gap-4">
+                                        <div>
+                                            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400 mb-1">{row.partLabel} — {row.questionLabel}</div>
+                                            <h3 className="text-xl font-bold text-slate-900">{row.questionText}</h3>
+                                            <div className="text-sm text-slate-500 mt-1">{row.studentName} {row.studentGroup ? `· ${row.studentGroup}` : ''} · {formatCreatedAt(row.createdAt)}</div>
+                                        </div>
+                                        <button type="button" onClick={() => setExpandedId(null)} className="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_0.9fr] gap-5">
+                                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 space-y-3">
+                                            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Student Transcript</div>
+                                            <div className="text-sm leading-7 text-slate-700 whitespace-pre-wrap">
+                                                {row.transcript || 'No transcript captured for this response.'}
                                             </div>
                                         </div>
-                                    </button>
 
-                                    {expanded && (
-                                        <div className="border-t border-slate-100 px-5 py-5 space-y-5 bg-slate-50/60">
-                                            <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_0.9fr] gap-5">
-                                                <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-3">
-                                                    <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Transcript</div>
-                                                    <div className="text-sm leading-7 text-slate-700 whitespace-pre-wrap min-h-[180px]">
-                                                        {row.transcript || 'No transcript captured for this response.'}
-                                                    </div>
+                                        <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-4">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div>
+                                                    <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">AI Evaluation</div>
+                                                    <div className="text-sm text-slate-500 mt-1">IELTS-style speaking criteria</div>
                                                 </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void handleAnalyze(row)}
+                                                    disabled={analyzingId === row.id}
+                                                    className="px-4 py-2 rounded-xl bg-[#1a9aaa] hover:bg-[#127080] text-white text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                                                >
+                                                    {analyzingId === row.id ? 'Analyzing...' : row.aiAnalysis ? 'Reanalyze' : 'Analyze with AI'}
+                                                </button>
+                                            </div>
 
-                                                <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-4">
-                                                    <div className="flex items-center justify-between gap-3">
-                                                        <div>
-                                                            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">AI Evaluation</div>
-                                                            <div className="text-sm text-slate-500 mt-1">IELTS-style speaking criteria</div>
-                                                        </div>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => void handleAnalyze(row)}
-                                                            disabled={analyzingId === row.id}
-                                                            className="px-4 py-2 rounded-xl bg-[#1a9aaa] hover:bg-[#127080] text-white text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-                                                        >
-                                                            {analyzingId === row.id ? 'Analyzing...' : row.aiAnalysis ? 'Reanalyze' : 'Analyze with AI'}
-                                                        </button>
+                                            {row.aiAnalysis ? (
+                                                <>
+                                                    <div className="grid grid-cols-2 gap-3">
+                                                        {([
+                                                            ['Task Response', row.aiAnalysis.criteria.taskResponse],
+                                                            ['Fluency & Coherence', row.aiAnalysis.criteria.fluencyCoherence],
+                                                            ['Lexical Resource', row.aiAnalysis.criteria.lexicalResource],
+                                                            ['Grammar', row.aiAnalysis.criteria.grammaticalRangeAccuracy],
+                                                            ['Pronunciation', row.aiAnalysis.criteria.pronunciation],
+                                                            ['Overall', row.aiAnalysis.overallBand],
+                                                        ] as [string, number][]).map(([label, score]) => (
+                                                            <div key={label} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                                                                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</div>
+                                                                <div className="text-lg font-bold text-slate-800 mt-1">{score}</div>
+                                                            </div>
+                                                        ))}
                                                     </div>
-
-                                                    {row.aiAnalysis ? (
-                                                        <>
-                                                            <div className="grid grid-cols-2 gap-3">
-                                                                {[
-                                                                    ['Task Response', row.aiAnalysis.criteria.taskResponse],
-                                                                    ['Fluency & Coherence', row.aiAnalysis.criteria.fluencyCoherence],
-                                                                    ['Lexical Resource', row.aiAnalysis.criteria.lexicalResource],
-                                                                    ['Grammar', row.aiAnalysis.criteria.grammaticalRangeAccuracy],
-                                                                    ['Pronunciation', row.aiAnalysis.criteria.pronunciation],
-                                                                    ['Overall', row.aiAnalysis.overallBand],
-                                                                ].map(([label, score]) => (
-                                                                    <div key={String(label)} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                                                                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</div>
-                                                                        <div className="text-lg font-bold text-slate-800 mt-1">{score}</div>
-                                                                    </div>
+                                                    {row.aiAnalysis.strengths.length > 0 && (
+                                                        <div>
+                                                            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400 mb-2">Strengths</div>
+                                                            <ul className="space-y-2 text-sm text-slate-700">
+                                                                {row.aiAnalysis.strengths.map((item, index) => (
+                                                                    <li key={index} className="rounded-xl bg-emerald-50 px-3 py-2">{item}</li>
                                                                 ))}
-                                                            </div>
-
-                                                            {row.aiAnalysis.strengths.length > 0 && (
-                                                                <div>
-                                                                    <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400 mb-2">Strengths</div>
-                                                                    <ul className="space-y-2 text-sm text-slate-700">
-                                                                        {row.aiAnalysis.strengths.map((item, index) => (
-                                                                            <li key={index} className="rounded-xl bg-emerald-50 px-3 py-2">{item}</li>
-                                                                        ))}
-                                                                    </ul>
-                                                                </div>
-                                                            )}
-
-                                                            {row.aiAnalysis.improvements.length > 0 && (
-                                                                <div>
-                                                                    <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400 mb-2">Improvements</div>
-                                                                    <ul className="space-y-2 text-sm text-slate-700">
-                                                                        {row.aiAnalysis.improvements.map((item, index) => (
-                                                                            <li key={index} className="rounded-xl bg-amber-50 px-3 py-2">{item}</li>
-                                                                        ))}
-                                                                    </ul>
-                                                                </div>
-                                                            )}
-
-                                                            <div>
-                                                                <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400 mb-2">Feedback</div>
-                                                                <div className="rounded-2xl bg-slate-50 px-4 py-4 text-sm leading-7 text-slate-700 whitespace-pre-wrap">
-                                                                    {row.aiAnalysis.feedback}
-                                                                </div>
-                                                            </div>
-                                                        </>
-                                                    ) : (
-                                                        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-                                                            No AI analysis yet. Run analysis to score this speaking response.
+                                                            </ul>
                                                         </div>
                                                     )}
+                                                    {row.aiAnalysis.improvements.length > 0 && (
+                                                        <div>
+                                                            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400 mb-2">Improvements</div>
+                                                            <ul className="space-y-2 text-sm text-slate-700">
+                                                                {row.aiAnalysis.improvements.map((item, index) => (
+                                                                    <li key={index} className="rounded-xl bg-amber-50 px-3 py-2">{item}</li>
+                                                                ))}
+                                                            </ul>
+                                                        </div>
+                                                    )}
+                                                    <div>
+                                                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400 mb-2">Feedback</div>
+                                                        <div className="rounded-2xl bg-slate-50 px-4 py-4 text-sm leading-7 text-slate-700 whitespace-pre-wrap">
+                                                            {row.aiAnalysis.feedback}
+                                                        </div>
+                                                    </div>
+                                                </>
+                                            ) : (
+                                                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                                                    No AI analysis yet. Click &quot;Analyze with AI&quot; to score this response.
                                                 </div>
-                                            </div>
+                                            )}
                                         </div>
-                                    )}
+                                    </div>
                                 </div>
                             )
-                        })}
-                    </div>
+                        })()}
+                    </>
                 )}
             </div>
         </TeacherLayout>

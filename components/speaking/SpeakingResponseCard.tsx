@@ -27,7 +27,7 @@ export default function SpeakingResponseCard({
             <div className="relative max-w-4xl ml-auto">
                 <div className="absolute right-[-56px] bottom-[34px] w-0 h-0 border-t-[22px] border-t-transparent border-b-[22px] border-b-transparent border-l-[86px] border-l-[#6ea4ff]" />
                 <div className="absolute right-[-50px] bottom-[38px] w-0 h-0 border-t-[18px] border-t-transparent border-b-[18px] border-b-transparent border-l-[74px] border-l-white" />
-                <div className="rounded-[2rem] border border-[#6ea4ff] bg-white px-8 py-8 min-h-[260px] shadow-sm">
+                <div className="rounded-[2rem] border border-[#6ea4ff] bg-white px-8 py-6 shadow-sm">
                     <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400 mb-3">{studentLabel}</div>
                     <div className="text-lg leading-8 text-slate-700 whitespace-pre-wrap">
                         {studentAnswer || 'No transcript captured for this attempt.'}

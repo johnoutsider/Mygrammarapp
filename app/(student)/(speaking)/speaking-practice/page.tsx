@@ -108,31 +108,31 @@ function SpeakingPracticeContent() {
 
     return (
         <StudentLayout title="Speaking Practice">
-            <div className="max-w-5xl mx-auto px-4 py-10 space-y-12">
+            <div className="h-full flex flex-col items-center justify-center gap-6 px-4 py-6 max-w-2xl mx-auto">
                 <SpeakingPromptBubble
                     label={`${assignment.partLabel} - Step ${currentStepIndex + 1} of ${assignment.questionSteps.length}`}
                     text={currentStep.text}
                 />
 
-                <div className="flex justify-center">
-                    <SpeakingCountdownRing
-                        remainingSeconds={remainingSeconds}
-                        totalSeconds={assignment.prepSeconds}
-                        label="Preparation Time"
-                        sublabel="Each linked question is given step by step"
-                    />
-                </div>
+                <SpeakingCountdownRing
+                    remainingSeconds={remainingSeconds}
+                    totalSeconds={assignment.prepSeconds}
+                    label="Preparation Time"
+                    sublabel="Each linked question is given step by step"
+                    size={220}
+                    strokeWidth={18}
+                />
 
-                <div className="flex justify-center gap-3">
+                <div className="flex gap-3">
                     <button
                         onClick={() => router.push(`/speaking-practice/session/${assignment.id}?step=${currentStepIndex}`)}
-                        className="px-6 py-3 rounded-xl bg-[#4c75c3] hover:bg-[#3f64ab] text-white font-semibold"
+                        className="px-6 py-2.5 rounded-xl bg-[#4c75c3] hover:bg-[#3f64ab] text-white font-semibold text-sm"
                     >
                         Start This Step
                     </button>
                     <button
                         onClick={() => router.push('/speaking-log')}
-                        className="px-6 py-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold"
+                        className="px-6 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-sm"
                     >
                         Open My Speaking Log
                     </button>

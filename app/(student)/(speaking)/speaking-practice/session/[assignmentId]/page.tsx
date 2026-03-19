@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import Script from 'next/script'
 import StudentLayout from '@/components/StudentLayout'
-import SpeakingCountdownRing from '@/components/speaking/SpeakingCountdownRing'
 import { useAccessGuard } from '@/hooks/useAccessGuard'
 import { getUserProfile } from '@/lib/auth'
 import { auth } from '@/lib/firebase'
@@ -101,14 +100,17 @@ export default function SpeakingSessionPage() {
     const noFaceFramesRef = useRef(0)
     const idleFramesRef = useRef(0)
     const warningCountRef = useRef(0)
-    const transcriptChunksRef = useRef<string[]>([])
+    const audioChunksRef = useRef<Blob[]>([])
     const sessionSecondsRef = useRef(0)
     const speakingTicksRef = useRef(0)
     const savedRef = useRef(false)
     const detectionDisabledRef = useRef(false)
     const riskLevelRef = useRef(0)
+    const logsRef = useRef<LogEntry[]>([])
 
-    const [scriptsReady, setScriptsReady] = useState(false)
+    const [scriptsReady, setScriptsReady] = useState(() =>
+        typeof window !== 'undefined' && Boolean(window.FaceMesh)
+    )
     const [assignment, setAssignment] = useState<SpeakingAssignment | null>(null)
     const [loading, setLoading] = useState(true)
     const [starting, setStarting] = useState(false)
@@ -125,7 +127,11 @@ export default function SpeakingSessionPage() {
 
     const addLog = useCallback((event: string, duration = '-') => {
         const time = new Date().toLocaleTimeString()
-        setLogs(current => [{ no: current.length + 1, time, event, duration }, ...current])
+        setLogs(current => {
+            const next = [{ no: current.length + 1, time, event, duration }, ...current]
+            logsRef.current = next
+            return next
+        })
     }, [])
 
     const updateRiskLevel = useCallback((nextRisk: number) => {
@@ -180,6 +186,19 @@ export default function SpeakingSessionPage() {
     const saveAndExit = useCallback(async () => {
         if (!assignment || !currentStep || savedRef.current) return
         savedRef.current = true
+
+        // Capture mimeType before stopMedia nulls the ref
+        const recorderMimeType = mediaRecorderRef.current?.mimeType || 'audio/webm'
+
+        // Stop the MediaRecorder and wait for its final data chunk
+        const recorder = mediaRecorderRef.current
+        if (recorder && recorder.state === 'recording') {
+            await new Promise<void>(resolve => {
+                recorder.addEventListener('stop', () => resolve(), { once: true })
+                recorder.stop()
+            })
+        }
+
         stopMedia()
 
         const currentUser = auth.currentUser
@@ -189,6 +208,25 @@ export default function SpeakingSessionPage() {
         }
 
         try {
+            // Combine all audio chunks into one valid file and transcribe
+            let transcript = ''
+            if (audioChunksRef.current.length > 0) {
+                const fullBlob = new Blob(audioChunksRef.current, { type: recorderMimeType })
+                if (fullBlob.size >= 1024) {
+                    const ext = recorderMimeType.includes('ogg') ? 'ogg' : 'webm'
+                    const fd = new FormData()
+                    fd.append('audio', fullBlob, `recording.${ext}`)
+                    try {
+                        const res = await fetch('/api/speaking/transcribe', { method: 'POST', body: fd })
+                        const data = await res.json()
+                        if (res.ok && typeof data?.text === 'string') transcript = data.text.trim()
+                    } catch (transcribeErr) {
+                        console.error('Transcription error:', transcribeErr)
+                    }
+                }
+                audioChunksRef.current = []
+            }
+
             const profile = await getUserProfile(currentUser.uid)
             await saveSpeakingResponse({
                 assignmentId: assignment.id,
@@ -199,11 +237,11 @@ export default function SpeakingSessionPage() {
                 stepTotal: assignment.questionSteps.length,
                 studentId: currentUser.uid,
                 studentName: profile?.displayName || profile?.name || currentUser.displayName || 'Student',
-                transcript: transcriptChunksRef.current.join(' ').trim(),
+                transcript,
                 warningCount: warningCountRef.current,
                 sessionSeconds: sessionSecondsRef.current,
                 speakingSeconds: Math.floor(speakingTicksRef.current / 10),
-                logs: logs.slice().reverse(),
+                logs: logsRef.current.slice(0, 100).reverse(),
             })
 
             if (stepIndex + 1 < assignment.questionSteps.length) {
@@ -216,30 +254,7 @@ export default function SpeakingSessionPage() {
             console.error(saveError)
             setError('Failed to save your speaking response.')
         }
-    }, [assignment, currentStep, logs, router, stepIndex, stopMedia])
-
-    const sendToGroq = useCallback(async (audioBlob: Blob) => {
-        try {
-            const formData = new FormData()
-            formData.append('audio', audioBlob, 'recording.webm')
-
-            const response = await fetch('/api/speaking/transcribe', {
-                method: 'POST',
-                body: formData,
-            })
-            const data = await response.json()
-            if (!response.ok) throw new Error(data?.error || 'Transcription failed.')
-
-            const text = typeof data?.text === 'string' ? data.text.trim() : ''
-            if (!text) return
-
-            transcriptChunksRef.current.push(text)
-            addLog('Transcript chunk captured', `${text.split(/\s+/).length} words`)
-        } catch (transcribeError) {
-            console.error(transcribeError)
-            addLog('Transcription failed')
-        }
-    }, [addLog])
+    }, [assignment, currentStep, router, stepIndex, stopMedia])
 
     const handleFaceMeshResults = useCallback((results: FaceMeshResults) => {
         if (detectionDisabledRef.current) return
@@ -344,10 +359,9 @@ export default function SpeakingSessionPage() {
             setWarningCount(0)
 
             try {
-                const [videoStream, audioStream] = await Promise.all([
-                    navigator.mediaDevices.getUserMedia({ video: true }),
-                    navigator.mediaDevices.getUserMedia({ audio: true }),
-                ])
+                const combinedStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+                const videoStream = new MediaStream(combinedStream.getVideoTracks())
+                const audioStream = new MediaStream(combinedStream.getAudioTracks())
 
                 videoStreamRef.current = videoStream
                 audioStreamRef.current = audioStream
@@ -418,11 +432,13 @@ export default function SpeakingSessionPage() {
                 }, 100)
 
                 if (typeof MediaRecorder !== 'undefined') {
-                    const recorder = new MediaRecorder(audioStream)
+                    const preferredTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg']
+                    const mimeType = preferredTypes.find(t => MediaRecorder.isTypeSupported(t)) ?? ''
+                    const recorder = mimeType ? new MediaRecorder(audioStream, { mimeType }) : new MediaRecorder(audioStream)
                     mediaRecorderRef.current = recorder
                     recorder.ondataavailable = event => {
                         if (event.data.size > 0) {
-                            void sendToGroq(event.data)
+                            audioChunksRef.current.push(event.data)
                         }
                     }
                     recorder.start(10000)
@@ -455,7 +471,7 @@ export default function SpeakingSessionPage() {
         return () => {
             stopMedia()
         }
-    }, [addLog, assignment, currentStep, disableDetection, handleFaceMeshResults, loading, saveAndExit, scriptsReady, sendToGroq, stepIndex, stopMedia, updateRiskLevel])
+    }, [addLog, assignment, currentStep, disableDetection, handleFaceMeshResults, loading, saveAndExit, scriptsReady, stepIndex, stopMedia, updateRiskLevel])
 
     if (loading) {
         return (
@@ -466,6 +482,9 @@ export default function SpeakingSessionPage() {
             </StudentLayout>
         )
     }
+
+    const ringColor = getRingColor(riskLevel, detectionEnabled)
+    const progressPct = assignment ? (remainingSeconds / assignment.speakingSeconds) * 100 : 100
 
     return (
         <StudentLayout title="Speaking Session">
@@ -479,40 +498,61 @@ export default function SpeakingSessionPage() {
                 }}
             />
 
-            <div className="max-w-6xl mx-auto px-4 py-10 space-y-10">
-                {error && (
-                    <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">{error}</div>
-                )}
+            <div className="h-full flex flex-col lg:flex-row items-start justify-center gap-5 p-4 lg:p-6 max-w-5xl mx-auto w-full overflow-hidden">
 
-                <div className="text-center space-y-3">
-                    <div className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">
-                        {assignment?.partLabel || 'Speaking'} - Step {stepIndex + 1} of {assignment?.questionSteps.length || 1}
+                {/* ── Video panel ── */}
+                <div className="flex flex-col items-center gap-3 w-full lg:w-[420px] lg:flex-shrink-0">
+                    <div
+                        className="w-full rounded-2xl overflow-hidden bg-slate-950 shadow-lg transition-colors duration-500"
+                        style={{ border: `4px solid ${ringColor}`, aspectRatio: '1 / 1.1' }}
+                    >
+                        <video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
                     </div>
-                    <h1 className="text-4xl font-bold text-slate-900">
-                        {currentStep?.text || (starting ? 'Starting your speaking timer...' : 'Answer the question clearly and naturally')}
-                    </h1>
-                    <p className="text-base text-slate-500">{status}</p>
-                    <p className={`text-sm font-semibold ${riskLevel >= 60 ? 'text-red-600' : riskLevel >= 30 ? 'text-amber-600' : 'text-green-600'}`}>
-                        {getRiskLabel(riskLevel, detectionEnabled)}
-                    </p>
+
+                    {/* Countdown card */}
+                    <div className="w-full bg-white rounded-xl px-4 py-2.5 shadow-sm">
+                        <div className="flex justify-between items-center mb-1.5">
+                            <span className="text-xs font-medium text-slate-500">Step {stepIndex + 1} Countdown</span>
+                            <span className="text-lg font-bold text-slate-800">{remainingSeconds}s</span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                            <div
+                                className="h-full rounded-full transition-all duration-1000"
+                                style={{ width: `${progressPct}%`, backgroundColor: ringColor }}
+                            />
+                        </div>
+                        <div className="mt-1 text-xs text-slate-400">Detection risk: {riskLevel}%</div>
+                    </div>
                 </div>
 
-                <div className="flex justify-center">
-                    <SpeakingCountdownRing
-                        remainingSeconds={remainingSeconds}
-                        totalSeconds={assignment?.speakingSeconds || 1}
-                        label={`Step ${stepIndex + 1} Countdown`}
-                        sublabel={`Detection risk: ${riskLevel}%`}
-                        ringColor={getRingColor(riskLevel, detectionEnabled)}
-                        showCenterTime={false}
-                        size={460}
-                        strokeWidth={30}
-                        centerContent={
-                            <div className="h-[330px] w-[330px] rounded-full overflow-hidden border-[8px] border-white bg-slate-950 shadow-inner">
-                                <video ref={videoRef} className="w-full h-full object-cover" autoPlay muted playsInline />
-                            </div>
-                        }
-                    />
+                {/* ── Info panel ── */}
+                <div className="flex flex-col justify-center gap-4 flex-1 min-h-0 lg:pt-2">
+                    {error && (
+                        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+                    )}
+
+                    <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400 mb-1.5">
+                            {assignment?.partLabel || 'Speaking'} &mdash; Step {stepIndex + 1} of {assignment?.questionSteps.length || 1}
+                        </div>
+                        <h1 className="text-xl lg:text-3xl font-bold text-slate-900 leading-snug">
+                            {currentStep?.text || (starting ? 'Starting your speaking timer...' : 'Answer the question clearly and naturally')}
+                        </h1>
+                    </div>
+
+                    <div className="space-y-1">
+                        <p className="text-sm text-slate-500">{status}</p>
+                        <p className={`text-xs font-semibold ${riskLevel >= 60 ? 'text-red-600' : riskLevel >= 30 ? 'text-amber-600' : 'text-green-600'}`}>
+                            {getRiskLabel(riskLevel, detectionEnabled)}
+                        </p>
+                    </div>
+
+                    <button
+                        onClick={() => void saveAndExit()}
+                        className="self-start px-4 py-2 rounded-xl text-sm font-semibold text-white bg-slate-700 hover:bg-slate-800 active:scale-95 transition-all"
+                    >
+                        End Session
+                    </button>
                 </div>
             </div>
         </StudentLayout>
