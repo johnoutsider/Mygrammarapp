@@ -26,7 +26,6 @@ export async function POST(request: Request) {
         upstream.append('file', audio, audio.name || 'recording.webm')
         upstream.append('model', OPENAI_TRANSCRIPTION_MODEL)
         upstream.append('language', 'en')
-        upstream.append('response_format', 'json')
 
         const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
             method: 'POST',
@@ -36,17 +35,31 @@ export async function POST(request: Request) {
             body: upstream,
         })
 
-        const data = await response.json()
+        const contentType = response.headers.get('content-type') || ''
+        const rawBody = await response.text()
 
         if (!response.ok) {
-            const message = typeof data?.error?.message === 'string'
-                ? data.error.message
-                : 'Transcription failed.'
-
+            console.error('OpenAI transcription error:', response.status, rawBody)
+            let message = 'Transcription failed.'
+            try {
+                const errData = JSON.parse(rawBody)
+                if (typeof errData?.error?.message === 'string') message = errData.error.message
+            } catch { /* plain text error */ }
             return NextResponse.json({ error: message }, { status: response.status })
         }
 
-        return NextResponse.json({ text: data.text || '' })
+        // Handle both JSON and plain text responses
+        let text = ''
+        if (contentType.includes('application/json')) {
+            try {
+                const data = JSON.parse(rawBody)
+                text = typeof data?.text === 'string' ? data.text.trim() : ''
+            } catch { text = rawBody.trim() }
+        } else {
+            text = rawBody.trim()
+        }
+
+        return NextResponse.json({ text })
     } catch (error) {
         console.error('Speaking transcription error:', error)
         return NextResponse.json(
