@@ -146,6 +146,13 @@ export default function SpeakingLogDetailPage() {
                                 ) : (
                                     <div className="text-base text-slate-400 italic">No transcript captured for this attempt.</div>
                                 )}
+                                {response.audioUrl && (
+                                    <audio
+                                        controls
+                                        src={response.audioUrl}
+                                        className="w-full mt-4 rounded-lg"
+                                    />
+                                )}
                             </div>
                         </div>
                     ))}

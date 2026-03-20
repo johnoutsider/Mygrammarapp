@@ -2,6 +2,7 @@ import { initializeApp, getApps } from 'firebase/app'
 import { getAuth } from 'firebase/auth'
 import { getFirestore, enableIndexedDbPersistence } from 'firebase/firestore'
 import { getDatabase } from 'firebase/database'
+import { getStorage } from 'firebase/storage'
 
 
 const firebaseConfig = {
@@ -36,4 +37,5 @@ if (typeof window !== 'undefined') {
 }
 
 export const rtdb = getDatabase(app)   // ← ADD this line
+export const storage = getStorage(app)
 export { app, auth, db }

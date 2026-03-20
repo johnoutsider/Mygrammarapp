@@ -6,7 +6,8 @@ import Script from 'next/script'
 import StudentLayout from '@/components/StudentLayout'
 import { useAccessGuard } from '@/hooks/useAccessGuard'
 import { getUserProfile } from '@/lib/auth'
-import { auth } from '@/lib/firebase'
+import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage'
+import { auth, storage } from '@/lib/firebase'
 import {
     getSpeakingAssignmentById,
     saveSpeakingResponse,
@@ -107,6 +108,8 @@ export default function SpeakingSessionPage() {
     const detectionDisabledRef = useRef(false)
     const riskLevelRef = useRef(0)
     const logsRef = useRef<LogEntry[]>([])
+    const selectedVideoIdRef = useRef('')
+    const selectedAudioIdRef = useRef('')
 
     const [scriptsReady, setScriptsReady] = useState(() =>
         typeof window !== 'undefined' && Boolean(window.FaceMesh)
@@ -114,6 +117,11 @@ export default function SpeakingSessionPage() {
     const [assignment, setAssignment] = useState<SpeakingAssignment | null>(null)
     const [loading, setLoading] = useState(true)
     const [starting, setStarting] = useState(false)
+    const [sessionStarted, setSessionStarted] = useState(false)
+    const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([])
+    const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([])
+    const [selectedVideoId, setSelectedVideoId] = useState('')
+    const [selectedAudioId, setSelectedAudioId] = useState('')
     const [status, setStatus] = useState('Preparing camera and microphone...')
     const [remainingSeconds, setRemainingSeconds] = useState(0)
     const [warningCount, setWarningCount] = useState(0)
@@ -121,6 +129,10 @@ export default function SpeakingSessionPage() {
     const [error, setError] = useState<string | null>(null)
     const [detectionEnabled, setDetectionEnabled] = useState(true)
     const [riskLevel, setRiskLevel] = useState(0)
+
+    // Keep refs in sync with state so useEffect callbacks can read the latest values
+    selectedVideoIdRef.current = selectedVideoId
+    selectedAudioIdRef.current = selectedAudioId
 
     const stepIndex = useMemo(() => getStepIndex(searchParams.get('step'), assignment?.questionSteps.length ?? 1), [assignment?.questionSteps.length, searchParams])
     const currentStep: SpeakingQuestionStep | null = assignment?.questionSteps[stepIndex] ?? null
@@ -208,12 +220,24 @@ export default function SpeakingSessionPage() {
         }
 
         try {
-            // Combine all audio chunks into one valid file and transcribe
+            // Combine all audio chunks into one valid file, upload to Storage, then transcribe
             let transcript = ''
+            let audioUrl: string | undefined
             if (audioChunksRef.current.length > 0) {
                 const fullBlob = new Blob(audioChunksRef.current, { type: recorderMimeType })
                 if (fullBlob.size >= 1024) {
                     const ext = recorderMimeType.includes('ogg') ? 'ogg' : 'webm'
+
+                    // Upload audio to Firebase Storage
+                    try {
+                        const audioRef = storageRef(storage, `speaking/${currentUser.uid}/${Date.now()}.${ext}`)
+                        const snapshot = await uploadBytes(audioRef, fullBlob, { contentType: recorderMimeType })
+                        audioUrl = await getDownloadURL(snapshot.ref)
+                    } catch (uploadErr) {
+                        console.error('Audio upload error:', uploadErr)
+                    }
+
+                    // Transcribe with OpenAI
                     const fd = new FormData()
                     fd.append('audio', fullBlob, `recording.${ext}`)
                     try {
@@ -238,6 +262,7 @@ export default function SpeakingSessionPage() {
                 studentId: currentUser.uid,
                 studentName: profile?.displayName || profile?.name || currentUser.displayName || 'Student',
                 transcript,
+                audioUrl,
                 warningCount: warningCountRef.current,
                 sessionSeconds: sessionSecondsRef.current,
                 speakingSeconds: Math.floor(speakingTicksRef.current / 10),
@@ -343,8 +368,30 @@ export default function SpeakingSessionPage() {
         setRemainingSeconds(assignment.speakingSeconds)
     }, [assignment, stepIndex])
 
+    // Enumerate camera/mic devices for the setup screen
     useEffect(() => {
-        if (!assignment || !currentStep || !scriptsReady || loading) return
+        if (loading || !assignment || sessionStarted) return
+        const enumDevices = async () => {
+            try {
+                const tempStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+                tempStream.getTracks().forEach(t => t.stop())
+                const all = await navigator.mediaDevices.enumerateDevices()
+                const vids = all.filter(d => d.kind === 'videoinput')
+                const auds = all.filter(d => d.kind === 'audioinput')
+                setVideoDevices(vids)
+                setAudioDevices(auds)
+                // Auto-select the first available device so no manual picking is needed
+                if (vids.length > 0) setSelectedVideoId(vids[0].deviceId)
+                if (auds.length > 0) setSelectedAudioId(auds[0].deviceId)
+            } catch (err) {
+                console.error('Device enumeration error:', err)
+            }
+        }
+        void enumDevices()
+    }, [loading, assignment, sessionStarted])
+
+    useEffect(() => {
+        if (!assignment || !currentStep || !scriptsReady || loading || !sessionStarted) return
 
         const startSession = async () => {
             if (!videoRef.current) return
@@ -359,7 +406,10 @@ export default function SpeakingSessionPage() {
             setWarningCount(0)
 
             try {
-                const combinedStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+                const combinedStream = await navigator.mediaDevices.getUserMedia({
+                    video: selectedVideoIdRef.current ? { deviceId: { exact: selectedVideoIdRef.current } } : true,
+                    audio: selectedAudioIdRef.current ? { deviceId: { exact: selectedAudioIdRef.current } } : true,
+                })
                 const videoStream = new MediaStream(combinedStream.getVideoTracks())
                 const audioStream = new MediaStream(combinedStream.getAudioTracks())
 
@@ -471,7 +521,7 @@ export default function SpeakingSessionPage() {
         return () => {
             stopMedia()
         }
-    }, [addLog, assignment, currentStep, disableDetection, handleFaceMeshResults, loading, saveAndExit, scriptsReady, stepIndex, stopMedia, updateRiskLevel])
+    }, [addLog, assignment, currentStep, disableDetection, handleFaceMeshResults, loading, saveAndExit, scriptsReady, sessionStarted, stepIndex, stopMedia, updateRiskLevel])
 
     if (loading) {
         return (
@@ -485,6 +535,80 @@ export default function SpeakingSessionPage() {
 
     const ringColor = getRingColor(riskLevel, detectionEnabled)
     const progressPct = assignment ? (remainingSeconds / assignment.speakingSeconds) * 100 : 100
+
+    // ── Device setup screen ──
+    if (!sessionStarted && assignment) {
+        const selectClass = 'w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-[#4c75c3]'
+        return (
+            <StudentLayout title="Speaking Session">
+                <Script
+                    src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"
+                    strategy="afterInteractive"
+                    onLoad={() => setScriptsReady(true)}
+                    onError={() => { setScriptsReady(true); setDetectionEnabled(false) }}
+                />
+                <div className="max-w-lg mx-auto px-4 py-10 space-y-6">
+                    <div>
+                        <h1 className="text-2xl font-bold text-slate-900">Set Up Your Devices</h1>
+                        <p className="text-sm text-slate-500 mt-1">Choose your camera and microphone before starting.</p>
+                    </div>
+
+                    {error && (
+                        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+                    )}
+
+                    <div className="space-y-4">
+                        <div>
+                            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Camera</label>
+                            <select
+                                value={selectedVideoId}
+                                onChange={e => setSelectedVideoId(e.target.value)}
+                                className={selectClass}
+                            >
+                                <option value="">Default camera</option>
+                                {videoDevices.map(d => (
+                                    <option key={d.deviceId} value={d.deviceId}>
+                                        {d.label || `Camera ${d.deviceId.slice(0, 8)}`}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div>
+                            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Microphone</label>
+                            <select
+                                value={selectedAudioId}
+                                onChange={e => setSelectedAudioId(e.target.value)}
+                                className={selectClass}
+                            >
+                                <option value="">Default microphone</option>
+                                {audioDevices.map(d => (
+                                    <option key={d.deviceId} value={d.deviceId}>
+                                        {d.label || `Microphone ${d.deviceId.slice(0, 8)}`}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-5 py-4">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-1">
+                            {assignment.partLabel} &mdash; Step {stepIndex + 1} of {assignment.questionSteps.length}
+                        </div>
+                        <div className="text-base font-semibold text-slate-900">{currentStep?.text}</div>
+                    </div>
+
+                    <button
+                        onClick={() => setSessionStarted(true)}
+                        disabled={!scriptsReady}
+                        className="w-full px-6 py-3 rounded-xl bg-[#4c75c3] hover:bg-[#3f64ab] text-white font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                        {scriptsReady ? 'Start Session' : 'Loading face detection...'}
+                    </button>
+                </div>
+            </StudentLayout>
+        )
+    }
 
     return (
         <StudentLayout title="Speaking Session">

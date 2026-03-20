@@ -65,6 +65,7 @@ export interface SpeakingResponse {
     speakingSeconds: number
     logs: SpeakingLogEntry[]
     createdAt: string
+    audioUrl?: string
     aiAnalysis?: SpeakingAiAnalysis
 }
 
@@ -87,6 +88,7 @@ type UserSpeakingData = {
 }
 
 const SPEAKING_SETTINGS_DOC = doc(db, 'settings', 'speakingAssignments')
+const SPEAKING_TOPICS_DOC = doc(db, 'settings', 'speakingTopics')
 
 function createId(prefix: string): string {
     if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -183,6 +185,7 @@ function normalizeResponse(raw: unknown): SpeakingResponse | null {
         speakingSeconds: Number(record.speakingSeconds ?? 0),
         logs: Array.isArray(record.logs) ? record.logs as SpeakingLogEntry[] : [],
         createdAt: typeof record.createdAt === 'string' ? record.createdAt : '',
+        audioUrl: typeof record.audioUrl === 'string' ? record.audioUrl : undefined,
         aiAnalysis: normalizeAnalysis(record.aiAnalysis),
     }
 }
@@ -336,4 +339,27 @@ export async function listAllSpeakingResponses(): Promise<TeacherSpeakingRespons
     })
 
     return rows.sort((left, right) => (right.createdAt || '').localeCompare(left.createdAt || ''))
+}
+
+export async function listSpeakingTopics(): Promise<string[]> {
+    const snapshot = await getDoc(SPEAKING_TOPICS_DOC)
+    if (!snapshot.exists()) return []
+    const data = snapshot.data() as { topics?: unknown }
+    return Array.isArray(data.topics) ? data.topics.filter((t): t is string => typeof t === 'string') : []
+}
+
+export async function addSpeakingTopic(topic: string): Promise<string[]> {
+    const existing = await listSpeakingTopics()
+    const trimmed = topic.trim()
+    if (!trimmed || existing.includes(trimmed)) return existing
+    const updated = [...existing, trimmed]
+    await setDoc(SPEAKING_TOPICS_DOC, { topics: updated })
+    return updated
+}
+
+export async function deleteSpeakingTopic(topic: string): Promise<string[]> {
+    const existing = await listSpeakingTopics()
+    const updated = existing.filter(t => t !== topic)
+    await setDoc(SPEAKING_TOPICS_DOC, { topics: updated })
+    return updated
 }
