@@ -5,7 +5,8 @@
       "mcp__Windows-MCP__PowerShell",
       "mcp__Kapture_Browser_Automation__list_tabs",
       "mcp__Kapture_Browser_Automation__new_tab",
-      "Bash(find \"D:\\\\Coding\\\\Antigravity folder\\\\Mygrammarapp\\\\.claude\\\\worktrees\\\\exciting-solomon\\\\app\\\\\\(teacher\\)\\\\teacher\\\\speaking\" -type f -o -type d)"
+      "Bash(find \"D:\\\\Coding\\\\Antigravity folder\\\\Mygrammarapp\\\\.claude\\\\worktrees\\\\exciting-solomon\\\\app\\\\\\(teacher\\)\\\\teacher\\\\speaking\" -type f -o -type d)",
+      "Bash(npx tsc:*)"
     ]
   }
 }

@@ -6,7 +6,12 @@ import { onAuthStateChanged } from 'firebase/auth'
 import StudentLayout from '@/components/StudentLayout'
 import { useAccessGuard } from '@/hooks/useAccessGuard'
 import { auth } from '@/lib/firebase'
-import { listStudentSpeakingResponses, SpeakingResponse } from '@/lib/speakingService'
+import {
+    deleteSessionResponses,
+    listStudentSpeakingResponses,
+    sendSessionForAnalysis,
+    SpeakingResponse,
+} from '@/lib/speakingService'
 
 function formatDate(value: string) {
     if (!value) return '-'
@@ -23,6 +28,9 @@ export default function SpeakingLogDetailPage() {
     const [allResponses, setAllResponses] = useState<SpeakingResponse[]>([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
+    const [sending, setSending] = useState(false)
+    const [deleting, setDeleting] = useState(false)
+    const [studentId, setStudentId] = useState<string | null>(null)
 
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -30,6 +38,7 @@ export default function SpeakingLogDetailPage() {
                 setLoading(false)
                 return
             }
+            setStudentId(user.uid)
             try {
                 const responses = await listStudentSpeakingResponses(user.uid)
                 setAllResponses(responses)
@@ -48,12 +57,9 @@ export default function SpeakingLogDetailPage() {
         const found = allResponses.find(r => r.id === params.responseId)
         if (!found) return { target: null, sessionResponses: [] }
 
-        // Get all responses with the same assignmentId
         const sameAssignment = allResponses.filter(r => r.assignmentId === found.assignmentId)
-
-        // Group into sessions by proximity of createdAt (within 30 minutes = same session)
         const targetTime = new Date(found.createdAt).getTime()
-        const sessionWindow = 30 * 60 * 1000 // 30 minutes
+        const sessionWindow = 30 * 60 * 1000
 
         const session = sameAssignment
             .filter(r => Math.abs(new Date(r.createdAt).getTime() - targetTime) < sessionWindow)
@@ -61,6 +67,40 @@ export default function SpeakingLogDetailPage() {
 
         return { target: found, sessionResponses: session }
     }, [allResponses, params.responseId])
+
+    const alreadySent = sessionResponses.length > 0 && sessionResponses.every(r => r.sentForAnalysis)
+
+    const handleSendForAnalysis = async () => {
+        if (!studentId || sessionResponses.length === 0) return
+        setSending(true)
+        setError(null)
+        try {
+            const ids = sessionResponses.map(r => r.id)
+            await sendSessionForAnalysis(studentId, ids)
+            setAllResponses(prev => prev.map(r => ids.includes(r.id) ? { ...r, sentForAnalysis: true } : r))
+        } catch (err) {
+            console.error(err)
+            setError('Failed to send for analysis.')
+        } finally {
+            setSending(false)
+        }
+    }
+
+    const handleDelete = async () => {
+        if (!studentId || sessionResponses.length === 0) return
+        if (!confirm('Delete this session? This cannot be undone.')) return
+        setDeleting(true)
+        setError(null)
+        try {
+            const ids = sessionResponses.map(r => r.id)
+            await deleteSessionResponses(studentId, ids)
+            router.push('/speaking-log')
+        } catch (err) {
+            console.error(err)
+            setError('Failed to delete session.')
+            setDeleting(false)
+        }
+    }
 
     if (loading) {
         return (
@@ -94,7 +134,7 @@ export default function SpeakingLogDetailPage() {
         <StudentLayout title="Speaking Log">
             <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
                 {/* Header */}
-                <div className="flex items-center justify-between gap-4">
+                <div className="flex items-start justify-between gap-4 flex-wrap">
                     <div>
                         <button
                             onClick={() => router.push('/speaking-log')}
@@ -107,7 +147,35 @@ export default function SpeakingLogDetailPage() {
                             {sessionResponses.length} question{sessionResponses.length !== 1 ? 's' : ''} &middot; {formatDate(target.createdAt)}
                         </p>
                     </div>
+                    <div className="flex items-center gap-2 pt-7">
+                        {alreadySent ? (
+                            <span className="rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold px-4 py-2">
+                                Sent for analysis
+                            </span>
+                        ) : (
+                            <button
+                                type="button"
+                                onClick={() => void handleSendForAnalysis()}
+                                disabled={sending}
+                                className="px-4 py-2 rounded-xl bg-[#1a9aaa] hover:bg-[#127080] text-white text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            >
+                                {sending ? 'Sending...' : 'Send for Analysis'}
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            onClick={() => void handleDelete()}
+                            disabled={deleting}
+                            className="px-4 py-2 rounded-xl bg-red-500 hover:bg-red-600 text-white text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                            {deleting ? 'Deleting...' : 'Delete'}
+                        </button>
+                    </div>
                 </div>
+
+                {error && (
+                    <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">{error}</div>
+                )}
 
                 {/* Questions & Answers in order */}
                 <div className="space-y-5">

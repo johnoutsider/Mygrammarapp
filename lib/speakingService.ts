@@ -67,6 +67,7 @@ export interface SpeakingResponse {
     createdAt: string
     audioUrl?: string
     aiAnalysis?: SpeakingAiAnalysis
+    sentForAnalysis?: boolean
 }
 
 export interface TeacherSpeakingResponse extends SpeakingResponse {
@@ -187,6 +188,7 @@ function normalizeResponse(raw: unknown): SpeakingResponse | null {
         createdAt: typeof record.createdAt === 'string' ? record.createdAt : '',
         audioUrl: typeof record.audioUrl === 'string' ? record.audioUrl : undefined,
         aiAnalysis: normalizeAnalysis(record.aiAnalysis),
+        sentForAnalysis: record.sentForAnalysis === true,
     }
 }
 
@@ -362,4 +364,41 @@ export async function deleteSpeakingTopic(topic: string): Promise<string[]> {
     const updated = existing.filter(t => t !== topic)
     await setDoc(SPEAKING_TOPICS_DOC, { topics: updated })
     return updated
+}
+
+export async function sendSessionForAnalysis(studentId: string, responseIds: string[]): Promise<void> {
+    const userRef = doc(db, 'users', studentId)
+    const userSnapshot = await getDoc(userRef)
+    if (!userSnapshot.exists()) return
+
+    const data = userSnapshot.data() as UserSpeakingData
+    const responses = Array.isArray(data.speakingResponses) ? data.speakingResponses : []
+    const updated = responses.map(r => {
+        const normalized = normalizeResponse(r)
+        if (!normalized) return r
+        return normalized.id && responseIds.includes(normalized.id)
+            ? { ...normalized, sentForAnalysis: true }
+            : normalized
+    })
+    const sanitized = JSON.parse(JSON.stringify(updated)) as SpeakingResponse[]
+    await updateDoc(userRef, { speakingResponses: sanitized })
+}
+
+export async function deleteSessionResponses(studentId: string, responseIds: string[]): Promise<void> {
+    const userRef = doc(db, 'users', studentId)
+    const userSnapshot = await getDoc(userRef)
+    if (!userSnapshot.exists()) return
+
+    const data = userSnapshot.data() as UserSpeakingData
+    const responses = Array.isArray(data.speakingResponses) ? data.speakingResponses : []
+    const updated = responses
+        .map(normalizeResponse)
+        .filter((r): r is SpeakingResponse => Boolean(r) && !responseIds.includes(r!.id))
+    const sanitized = JSON.parse(JSON.stringify(updated)) as SpeakingResponse[]
+    await updateDoc(userRef, { speakingResponses: sanitized })
+}
+
+export async function listAnalyzedSpeakingResponses(): Promise<TeacherSpeakingResponse[]> {
+    const all = await listAllSpeakingResponses()
+    return all.filter(r => r.sentForAnalysis === true)
 }
