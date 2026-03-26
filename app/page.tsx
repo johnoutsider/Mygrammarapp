@@ -49,12 +49,14 @@ export default function Home() {
                     const profilePromise = getUserProfile(user.uid)
                     const role = await Promise.race([
                         profilePromise.then(profile => profile?.role ?? 'student'),
-                        new Promise<'student'>(resolve => setTimeout(() => resolve('student'), 1200)),
+                        new Promise<'student' | 'teacher' | 'admin'>(resolve => setTimeout(() => resolve('student'), 1200)),
                     ])
 
                     if (!active) return
 
-                    if (role === 'teacher') {
+                    if (role === 'admin') {
+                        router.replace('/admin')
+                    } else if (role === 'teacher') {
                         router.replace('/teacher')
                     } else {
                         router.replace('/dashboard')

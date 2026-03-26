@@ -10,6 +10,24 @@ import { doc, getDoc, setDoc, updateDoc, arrayUnion } from 'firebase/firestore'
 // Types
 // ─────────────────────────────────────────────
 
+export interface TeacherPermissions {
+    canCreateClasses: boolean
+    canDeleteStudents: boolean
+    canUseAITools: boolean
+    canHostGames: boolean
+    canManageSpeaking: boolean
+    maxStudents?: number
+    maxClasses?: number
+}
+
+export const DEFAULT_TEACHER_PERMISSIONS: TeacherPermissions = {
+    canCreateClasses: true,
+    canDeleteStudents: true,
+    canUseAITools: true,
+    canHostGames: true,
+    canManageSpeaking: true,
+}
+
 export interface UserProfile {
     uid: string
     email: string
@@ -17,6 +35,16 @@ export interface UserProfile {
     displayName?: string
     role: 'admin' | 'teacher' | 'student'
     createdAt: Date
+
+    // ── Account status (teachers only) ──
+    status?: 'pending' | 'approved' | 'suspended' | 'rejected'
+    approvedBy?: string
+    approvedAt?: Date
+    suspendedAt?: Date
+    suspendedReason?: string
+    rejectedReason?: string
+    lastActiveAt?: Date
+    permissions?: TeacherPermissions
 
     // ── Student fields ──
     classId: string          // single class per student, 'default-class' until assigned
@@ -48,15 +76,20 @@ export async function signInWithGoogle(): Promise<UserProfile | null> {
         const userDoc = await getDoc(doc(db, 'users', user.uid))
 
         if (!userDoc.exists()) {
-            // New user — student by default, placed in default-class for full access
+            const email = user.email || ''
+            // Check if this email is pre-approved as admin
+            const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean)
+            const isAdminEmail = adminEmails.includes(email.toLowerCase())
+
             const newProfile: UserProfile = {
                 uid: user.uid,
-                email: user.email || '',
-                name: user.displayName || 'Student',
-                displayName: user.displayName || 'Student',
-                role: 'student',
-                classId: 'default-class',   // full access until teacher assigns to a real class
-                accessMode: 'both',          // full access by default
+                email,
+                name: user.displayName || 'User',
+                displayName: user.displayName || 'User',
+                role: isAdminEmail ? 'admin' : 'student',
+                status: isAdminEmail ? 'approved' : undefined,
+                classId: 'default-class',
+                accessMode: 'both',
                 createdAt: new Date(),
             }
             await setDoc(doc(db, 'users', user.uid), newProfile)
@@ -77,6 +110,63 @@ export async function signInWithGoogle(): Promise<UserProfile | null> {
             alert('ERROR: Google Sign-In is not enabled in Firebase Console')
         }
 
+        return null
+    }
+}
+
+/**
+ * Signs in with Google and requests teacher access.
+ * - New users → created with role:'teacher', status:'pending'
+ * - Existing students → upgraded to role:'teacher', status:'pending'
+ * - Existing teachers/admins → returned as-is
+ */
+export async function signInWithGoogleAsTeacher(): Promise<UserProfile | null> {
+    try {
+        const provider = new GoogleAuthProvider()
+        provider.setCustomParameters({ prompt: 'select_account' })
+
+        const result = await signInWithPopup(auth, provider)
+        const user = result.user
+        const email = user.email || ''
+
+        const userDocRef = doc(db, 'users', user.uid)
+        const userDoc = await getDoc(userDocRef)
+
+        if (!userDoc.exists()) {
+            // Brand new user — create as pending teacher
+            const newProfile: UserProfile = {
+                uid: user.uid,
+                email,
+                name: user.displayName || 'Teacher',
+                displayName: user.displayName || 'Teacher',
+                role: 'teacher',
+                status: 'pending',
+                classId: 'default-class',
+                classIds: [],
+                createdAt: new Date(),
+            }
+            await setDoc(userDocRef, newProfile)
+            return newProfile
+        }
+
+        const existing = userDoc.data() as UserProfile
+
+        // Already teacher or admin — return as-is
+        if (existing.role === 'teacher' || existing.role === 'admin') {
+            return existing
+        }
+
+        // Existing student — request upgrade to teacher
+        const updatedProfile: UserProfile = {
+            ...existing,
+            role: 'teacher',
+            status: 'pending',
+            classIds: [],
+        }
+        await setDoc(userDocRef, { role: 'teacher', status: 'pending', classIds: [] }, { merge: true })
+        return updatedProfile
+    } catch (error: any) {
+        console.error('Teacher sign in error:', error)
         return null
     }
 }
@@ -112,14 +202,27 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
 
 export async function updateUserRole(
     uid: string,
-    role: 'admin' | 'teacher' | 'student'
+    role: 'admin' | 'teacher' | 'student',
+    approvedBy?: string
 ): Promise<void> {
     try {
         const updates: Partial<UserProfile> = { role }
 
-        // When promoting to teacher, initialise classIds array
         if (role === 'teacher') {
             updates.classIds = ['default-class']
+            updates.status = 'approved'
+            updates.permissions = DEFAULT_TEACHER_PERMISSIONS
+            if (approvedBy) {
+                updates.approvedBy = approvedBy
+                updates.approvedAt = new Date()
+            }
+        } else if (role === 'admin') {
+            updates.status = 'approved'
+        } else if (role === 'student') {
+            // Demoting — clear teacher fields
+            updates.status = undefined
+            updates.permissions = undefined
+            updates.classIds = undefined
         }
 
         await setDoc(doc(db, 'users', uid), updates, { merge: true })

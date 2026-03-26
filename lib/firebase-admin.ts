@@ -24,7 +24,7 @@ function getServiceAccount() {
     );
 
     if (serviceAccountJson) {
-        const parsed = JSON.parse(normalizeEnvValue(serviceAccountJson));
+        const parsed = JSON.parse(serviceAccountJson.trim());
         return {
             projectId: String(parsed.project_id || parsed.projectId || ''),
             clientEmail: String(parsed.client_email || parsed.clientEmail || ''),

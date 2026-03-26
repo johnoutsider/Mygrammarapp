@@ -4,9 +4,11 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { auth, db } from '@/lib/firebase'
-import { collection, query, where, getDocs, orderBy, onSnapshot, limit } from 'firebase/firestore'
+import { collection, query, where, getDocs, orderBy, onSnapshot } from 'firebase/firestore'
 import TeacherLayout from '@/components/TeacherLayout'
 import { calculateFinalScores } from '@/lib/score-calculator'
+import { getUserProfile } from '@/lib/auth'
+import { getStudentsByClassIds } from '@/lib/groupService'
 
 interface StudentData {
     uid: string
@@ -58,8 +60,11 @@ export default function TeacherDashboard() {
             if (!auth.currentUser) { router.push('/'); return }
 
             try {
-                const studentsSnap = await getDocs(query(collection(db, 'users'), where('role', '==', 'student'), limit(500)))
-                const studentIds = studentsSnap.docs.map(d => d.id)
+                // Scope to teacher's own classes
+                const teacherProfile = await getUserProfile(auth.currentUser.uid)
+                const classIds: string[] = (teacherProfile as any)?.classIds || []
+                const studentsData = classIds.length > 0 ? await getStudentsByClassIds(classIds) : []
+                const studentIds = studentsData.map(s => s.uid)
 
                 const essaysSnapDocs: any[] = []
                 for (let i = 0; i < studentIds.length; i += 10) {
@@ -83,13 +88,11 @@ export default function TeacherDashboard() {
                     reviewsSnapDocs.push(...snap.docs)
                 }
 
-                // Polyfill for the previous map/filter code which expected QueryDocumentSnapshot arrays
                 const essaysSnap = { docs: essaysSnapDocs }
                 const reviewsSnap = { docs: reviewsSnapDocs }
 
-                const studentStats = await Promise.all(studentsSnap.docs.map(async (sDoc) => {
-                    const s = sDoc.data() as any
-                    const uid = sDoc.id
+                const studentStats = await Promise.all(studentsData.map(async (s) => {
+                    const uid = s.uid
 
                     const myEssays = essaysSnap.docs.filter(e => e.data().studentId === uid)
                     const myReviews = reviewsSnap.docs.filter(r =>
@@ -122,11 +125,11 @@ export default function TeacherDashboard() {
 
                     return {
                         uid,
-                        email: s.email || '',
-                        name: s.name || '',
-                        displayName: s.displayName || s.name || '',
+                        email: (s as any).email || '',
+                        name: (s as any).name || '',
+                        displayName: s.displayName || (s as any).name || '',
                         groupName: s.groupName || '',
-                        role: s.role,
+                        role: (s as any).role || 'student',
                         submittedCount: myEssays.length,
                         filteredCount: myEssays.length, // placeholder, computed below
                         reviewsGiven: myReviews.length,
@@ -150,8 +153,8 @@ export default function TeacherDashboard() {
 
                 // Store raw essays per student in a side map for filtering
                 const essaysByStudent: Record<string, typeof essaysSnap.docs> = {}
-                studentsSnap.docs.forEach(sDoc => {
-                    essaysByStudent[sDoc.id] = essaysSnap.docs.filter(e => e.data().studentId === sDoc.id)
+                studentsData.forEach(s => {
+                    essaysByStudent[s.uid] = essaysSnap.docs.filter(e => e.data().studentId === s.uid)
                 })
 
                 // We attach essaysByStudent to state via a ref trick—store it alongside students

@@ -2,8 +2,11 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
+import { onAuthStateChanged } from 'firebase/auth'
 import TeacherLayout from '@/components/TeacherLayout'
-import { listAnalyzedSpeakingResponses, TeacherSpeakingResponse } from '@/lib/speakingService'
+import { auth } from '@/lib/firebase'
+import { listAllSpeakingResponses, TeacherSpeakingResponse } from '@/lib/speakingService'
+import SpeakingAnalysisCard from '@/components/speaking/SpeakingAnalysisCard'
 
 const SESSION_WINDOW_MS = 30 * 60 * 1000
 
@@ -20,11 +23,20 @@ export default function TeacherSessionDetailPage() {
     const [allResponses, setAllResponses] = useState<TeacherSpeakingResponse[]>([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
+    const [teacherId, setTeacherId] = useState<string | null>(null)
+    const [analyzingId, setAnalyzingId] = useState<string | null>(null)
+
+    useEffect(() => {
+        const unsub = onAuthStateChanged(auth, user => {
+            if (user) setTeacherId(user.uid)
+        })
+        return () => unsub()
+    }, [])
 
     useEffect(() => {
         const load = async () => {
             try {
-                const data = await listAnalyzedSpeakingResponses()
+                const data = await listAllSpeakingResponses()
                 setAllResponses(data.filter(r => r.studentId === params.studentId))
             } catch (err) {
                 console.error(err)
@@ -50,6 +62,31 @@ export default function TeacherSessionDetailPage() {
 
         return { target: found, sessionResponses: session }
     }, [allResponses, params.responseId])
+
+    const handleAnalyze = async (responseId: string) => {
+        if (!teacherId) return
+        setAnalyzingId(responseId)
+        setError(null)
+        try {
+            const res = await fetch('/api/speaking/analyze', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ teacherId, studentId: params.studentId, responseId }),
+            })
+            const data = await res.json()
+            if (!res.ok) throw new Error(data.error || 'Analysis failed.')
+            if (data.analysis) {
+                setAllResponses(prev => prev.map(r =>
+                    r.id === responseId ? { ...r, aiAnalysis: data.analysis } : r
+                ))
+            }
+        } catch (err: any) {
+            console.error(err)
+            setError(err.message || 'Failed to analyze response.')
+        } finally {
+            setAnalyzingId(null)
+        }
+    }
 
     if (loading) {
         return (
@@ -98,10 +135,14 @@ export default function TeacherSessionDetailPage() {
                     </p>
                 </div>
 
+                {error && (
+                    <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">{error}</div>
+                )}
+
                 {/* Chat-style Q&A */}
-                <div className="space-y-6">
+                <div className="space-y-8">
                     {sessionResponses.map((response, index) => (
-                        <div key={response.id} className="space-y-2">
+                        <div key={response.id} className="space-y-3">
                             {/* Question bubble */}
                             <div className="flex gap-3 items-start">
                                 <span className="flex-shrink-0 flex items-center justify-center w-7 h-7 rounded-full bg-slate-200 text-slate-600 text-xs font-bold mt-0.5">
@@ -147,6 +188,24 @@ export default function TeacherSessionDetailPage() {
                                     </div>
                                 </div>
                             </div>
+
+                            {/* Analysis card or Analyze button */}
+                            {response.aiAnalysis ? (
+                                <div className="ml-10">
+                                    <SpeakingAnalysisCard analysis={response.aiAnalysis} />
+                                </div>
+                            ) : response.transcript ? (
+                                <div className="ml-10">
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleAnalyze(response.id)}
+                                        disabled={analyzingId === response.id}
+                                        className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                    >
+                                        {analyzingId === response.id ? 'Analyzing...' : 'Analyze This Response'}
+                                    </button>
+                                </div>
+                            ) : null}
                         </div>
                     ))}
                 </div>

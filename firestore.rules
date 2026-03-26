@@ -1,78 +1,105 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Users collection
-    match /users/{userId} {
-      allow read: if request.auth != null;
-      allow create, update: if request.auth != null && request.auth.uid == userId;
-      // Allow teachers to delete student accounts for the complete wipe feature
-      allow delete: if request.auth != null && (
-        request.auth.uid == userId || 
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher'
+
+    // ─── Helper functions ───────────────────────────────────────────────
+    function userDoc(uid) {
+      return get(/databases/$(database)/documents/users/$(uid));
+    }
+    function userExists(uid) {
+      return exists(/databases/$(database)/documents/users/$(uid));
+    }
+    function isAdmin(uid) {
+      return userExists(uid) && userDoc(uid).data.role == 'admin';
+    }
+    function isTeacher(uid) {
+      return userExists(uid) && userDoc(uid).data.role in ['teacher', 'admin'];
+    }
+    function isApprovedTeacher(uid) {
+      return userExists(uid) && (
+        userDoc(uid).data.role == 'admin' ||
+        (userDoc(uid).data.role == 'teacher' && userDoc(uid).data.status == 'approved')
       );
     }
-    
-    // Essays collection
+
+    // ─── Users collection ───────────────────────────────────────────────
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      // Users can update their own doc; admins can update any user
+      allow create: if request.auth != null && request.auth.uid == userId;
+      allow update: if request.auth != null && (
+        request.auth.uid == userId ||
+        isAdmin(request.auth.uid)
+      );
+      allow delete: if request.auth != null && (
+        request.auth.uid == userId ||
+        isApprovedTeacher(request.auth.uid) ||
+        isAdmin(request.auth.uid)
+      );
+    }
+
+    // ─── Audit log — admin read/write only ──────────────────────────────
+    match /auditLog/{logId} {
+      allow read: if request.auth != null && isAdmin(request.auth.uid);
+      allow create: if request.auth != null && isAdmin(request.auth.uid);
+      allow update, delete: if false;
+    }
+
+    // ─── Essays collection ──────────────────────────────────────────────
     match /essays/{essayId} {
       allow read: if request.auth != null;
       allow create: if request.auth != null && request.resource.data.studentId == request.auth.uid;
       allow update: if request.auth != null;
-      allow delete: if request.auth != null; // owner OR teacher (role enforced in app)
+      allow delete: if request.auth != null;
     }
-    
-    // Reviews collection
+
+    // ─── Reviews collection ─────────────────────────────────────────────
     match /reviews/{reviewId} {
       allow read: if request.auth != null;
-      // Allow AI reviews (reviewerRole == 'ai') or user reviews (reviewerId matches auth.uid)
-      allow create: if request.auth != null && 
-        (request.resource.data.reviewerRole == 'ai' || 
+      allow create: if request.auth != null &&
+        (request.resource.data.reviewerRole == 'ai' ||
          request.resource.data.reviewerId == request.auth.uid ||
          request.resource.data.reviewerRole == 'teacher');
       allow update: if request.auth != null && (
         resource.data.reviewerId == request.auth.uid ||
         get(/databases/$(database)/documents/essays/$(resource.data.essayId)).data.studentId == request.auth.uid
       );
-      allow delete: if request.auth != null; // reviewer OR teacher cascade
+      allow delete: if request.auth != null;
     }
 
+    // ─── Speaking assignments ────────────────────────────────────────────
     match /speakingAssignments/{assignmentId} {
       allow read: if request.auth != null;
-      allow create, update, delete: if request.auth != null &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+      allow create, update, delete: if request.auth != null && isApprovedTeacher(request.auth.uid);
     }
 
+    // ─── Speaking responses ──────────────────────────────────────────────
     match /speakingResponses/{responseId} {
       allow read: if request.auth != null && (
         resource.data.studentId == request.auth.uid ||
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher'
+        isTeacher(request.auth.uid)
       );
-      allow create: if request.auth != null &&
-        request.resource.data.studentId == request.auth.uid;
+      allow create: if request.auth != null && request.resource.data.studentId == request.auth.uid;
       allow update, delete: if false;
     }
 
-    // Assistant Chats collection — teachers can read and write their own chat histories
+    // ─── Assistant chats ─────────────────────────────────────────────────
     match /assistantChats/{chatId} {
       allow read, update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
       allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
     }
 
-    // Topics collection — teachers write, all authenticated users read
+    // ─── Topics ──────────────────────────────────────────────────────────
     match /topics/{topicId} {
       allow read: if request.auth != null;
-      allow create, delete: if request.auth != null;
-      allow update: if request.auth != null;
+      allow create, update, delete: if request.auth != null;
     }
 
-    // Messages collection — teachers create, all authenticated users read/update (mark as read)
+    // ─── Messages ────────────────────────────────────────────────────────
     match /messages/{messageId} {
       allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update: if request.auth != null;
-      allow delete: if request.auth != null;
+      allow create, update, delete: if request.auth != null;
 
-      // Student & teacher replies subcollection
       match /replies/{replyId} {
         allow read: if request.auth != null;
         allow create: if request.auth != null;
@@ -80,55 +107,61 @@ service cloud.firestore {
       }
     }
 
-    // Telegram temporary link codes (created by client with auth)
+    // ─── Telegram ────────────────────────────────────────────────────────
     match /telegram_links/{linkId} {
       allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
-      // Allow the owner to read their own link
       allow read, delete: if request.auth != null && resource.data.userId == request.auth.uid;
-      // Allow unauthenticated reads so the webhook API route can look up a code
       allow read: if true;
     }
 
-    // Telegram verified — written by the webhook (no auth), read+deleted by the client once linked
     match /telegram_verified/{docId} {
-      // Webhook writes here (no auth token) after a valid /start command
       allow create: if true;
-      // Client reads and deletes after linking (the random code acts as the capability token)
       allow read, delete: if true;
     }
-    // Scheduled tasks and exports - teachers manage automation entries from the app
+
+    // ─── Scheduled tasks ─────────────────────────────────────────────────
     match /scheduledTasks/{taskId} {
-      allow read, create, update, delete: if request.auth != null &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+      allow read, create, update, delete: if request.auth != null && isApprovedTeacher(request.auth.uid);
     }
 
     match /schedulerExports/{exportId} {
-      allow read, create, delete: if request.auth != null &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+      allow read, create, delete: if request.auth != null && isApprovedTeacher(request.auth.uid);
       allow update: if false;
     }
 
+    // ─── Progress reports ────────────────────────────────────────────────
     match /progressReports/{reportId} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+      allow write: if request.auth != null && isApprovedTeacher(request.auth.uid);
     }
 
-    // Settings collection — teachers write, all authenticated users read
-    // (used for EVA access control: settings/eva)
+    // ─── Settings ────────────────────────────────────────────────────────
     match /settings/{settingId} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+      // Platform settings: admin only; everything else: approved teachers
+      allow write: if request.auth != null && (
+        (settingId == 'platform' && isAdmin(request.auth.uid)) ||
+        (settingId != 'platform' && isApprovedTeacher(request.auth.uid))
+      );
     }
 
-    // AI Detection Logs — written by students (authenticated) when AI content is detected,
-    // read only by teachers
+    // ─── AI detection logs ───────────────────────────────────────────────
     match /ai_detection_logs/{logId} {
       allow create: if request.auth != null;
-      allow read: if request.auth != null &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+      allow read: if request.auth != null && isTeacher(request.auth.uid);
       allow update, delete: if false;
+    }
+
+    // ─── Classes ─────────────────────────────────────────────────────────
+    match /classes/{classId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if request.auth != null && isApprovedTeacher(request.auth.uid);
+    }
+
+    // ─── Groups ──────────────────────────────────────────────────────────
+    match /groups/{groupId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if request.auth != null && isApprovedTeacher(request.auth.uid);
     }
   }
 }

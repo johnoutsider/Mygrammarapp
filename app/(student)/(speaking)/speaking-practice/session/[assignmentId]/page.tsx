@@ -220,13 +220,12 @@ export default function SpeakingSessionPage() {
         }
 
         try {
-            // Combine all audio chunks into one valid file, upload to Storage, then transcribe
-            let transcript = ''
+            // Combine all audio chunks into one valid file and upload to Storage
             let audioUrl: string | undefined
             if (audioChunksRef.current.length > 0) {
                 const fullBlob = new Blob(audioChunksRef.current, { type: recorderMimeType })
                 if (fullBlob.size >= 1024) {
-                    const ext = recorderMimeType.includes('ogg') ? 'ogg' : 'webm'
+                    const ext = recorderMimeType.includes('ogg') ? 'ogg' : recorderMimeType.includes('mp4') ? 'mp4' : 'webm'
 
                     // Upload audio to Firebase Storage
                     try {
@@ -236,23 +235,13 @@ export default function SpeakingSessionPage() {
                     } catch (uploadErr) {
                         console.error('Audio upload error:', uploadErr)
                     }
-
-                    // Transcribe with OpenAI
-                    const fd = new FormData()
-                    fd.append('audio', fullBlob, `recording.${ext}`)
-                    try {
-                        const res = await fetch('/api/speaking/transcribe', { method: 'POST', body: fd })
-                        const data = await res.json()
-                        if (res.ok && typeof data?.text === 'string') transcript = data.text.trim()
-                    } catch (transcribeErr) {
-                        console.error('Transcription error:', transcribeErr)
-                    }
                 }
                 audioChunksRef.current = []
             }
 
             const profile = await getUserProfile(currentUser.uid)
-            await saveSpeakingResponse({
+            // Save with empty transcript — transcription happens on the review page via Groq
+            const saved = await saveSpeakingResponse({
                 assignmentId: assignment.id,
                 questionText: currentStep.text,
                 questionLabel: `${assignment.partLabel} - Step ${stepIndex + 1} of ${assignment.questionSteps.length}`,
@@ -261,7 +250,7 @@ export default function SpeakingSessionPage() {
                 stepTotal: assignment.questionSteps.length,
                 studentId: currentUser.uid,
                 studentName: profile?.displayName || profile?.name || currentUser.displayName || 'Student',
-                transcript,
+                transcript: '',
                 audioUrl,
                 warningCount: warningCountRef.current,
                 sessionSeconds: sessionSecondsRef.current,
@@ -270,11 +259,13 @@ export default function SpeakingSessionPage() {
             })
 
             if (stepIndex + 1 < assignment.questionSteps.length) {
+                // Go back to the prep page for the next step (runs countdown before starting next session)
                 router.replace(`/speaking-practice?assignmentId=${assignment.id}&step=${stepIndex + 1}`)
                 return
             }
 
-            router.replace('/speaking-log')
+            // Redirect to review page after last step so student can review + send/delete
+            router.replace(`/speaking-log/${saved.id}?review=true`)
         } catch (saveError) {
             console.error(saveError)
             setError('Failed to save your speaking response.')
@@ -482,7 +473,8 @@ export default function SpeakingSessionPage() {
                 }, 100)
 
                 if (typeof MediaRecorder !== 'undefined') {
-                    const preferredTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg']
+                    // Prefer ogg/mp4 — Groq Whisper does NOT support webm
+                    const preferredTypes = ['audio/ogg;codecs=opus', 'audio/ogg', 'audio/mp4', 'audio/webm;codecs=opus', 'audio/webm']
                     const mimeType = preferredTypes.find(t => MediaRecorder.isTypeSupported(t)) ?? ''
                     const recorder = mimeType ? new MediaRecorder(audioStream, { mimeType }) : new MediaRecorder(audioStream)
                     mediaRecorderRef.current = recorder

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
-import { GoogleGenerativeAI } from '@google/generative-ai'
+import OpenAI from 'openai'
 import { adminDb } from '@/lib/firebase-admin'
+import { buildAnalysisPrompt } from '@/lib/speakingPromptBuilder'
 
 function sanitizeJson(text: string) {
     let jsonText = text.trim()
@@ -11,6 +12,8 @@ function sanitizeJson(text: string) {
     }
     return jsonText
 }
+
+const SESSION_WINDOW_MS = 30 * 60 * 1000
 
 export async function POST(req: Request) {
     try {
@@ -25,9 +28,9 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: 'Only teachers can analyze speaking responses.' }, { status: 403 })
         }
 
-        const apiKey = process.env.GOOGLE_GEMINI_API_KEY
+        const apiKey = process.env.OPENAI_API_KEY
         if (!apiKey) {
-            return NextResponse.json({ error: 'GOOGLE_GEMINI_API_KEY is not configured.' }, { status: 500 })
+            return NextResponse.json({ error: 'OPENAI_API_KEY is not configured.' }, { status: 500 })
         }
 
         const studentRef = adminDb.collection('users').doc(String(studentId))
@@ -43,47 +46,43 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: 'Speaking response not found' }, { status: 404 })
         }
 
-        const response = responses[responseIndex]
-        if (response.aiAnalysis) {
-            return NextResponse.json({ success: true, analysis: response.aiAnalysis, cached: true })
+        const targetResponse = responses[responseIndex]
+        if (targetResponse.aiAnalysis) {
+            return NextResponse.json({ success: true, analysis: targetResponse.aiAnalysis, cached: true })
         }
 
-        const transcript = String(response.transcript || '').trim()
+        const transcript = String(targetResponse.transcript || '').trim()
         if (!transcript) {
             return NextResponse.json({ error: 'Transcript is empty. There is nothing to analyze.' }, { status: 400 })
         }
 
-        const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({ model: 'gemini-2.0-flash' })
-        const prompt = `You are an experienced IELTS Speaking examiner. Assess the student's speaking response using these criteria:
-1. Task Response
-2. Fluency and Coherence
-3. Lexical Resource
-4. Grammatical Range and Accuracy
-5. Pronunciation
+        // Gather session responses for full Q&A context
+        const targetTime = new Date(targetResponse.createdAt).getTime()
+        const sessionResponses = responses
+            .filter((r: any) =>
+                r.assignmentId === targetResponse.assignmentId &&
+                Math.abs(new Date(r.createdAt).getTime() - targetTime) < SESSION_WINDOW_MS &&
+                String(r.transcript || '').trim()
+            )
+            .sort((a: any, b: any) => (a.stepIndex ?? 0) - (b.stepIndex ?? 0))
 
-Question:
-${String(response.questionText || '')}
+        const pairs = sessionResponses.length > 1
+            ? sessionResponses.map((r: any) => ({
+                questionText: String(r.questionText || ''),
+                transcript: String(r.transcript || ''),
+            }))
+            : [{ questionText: String(targetResponse.questionText || ''), transcript }]
 
-Student Transcript:
-${transcript}
+        const prompt = buildAnalysisPrompt(pairs)
 
-Return strict JSON in this exact shape:
-{
-  "taskResponse": <0-9 in 0.5 increments>,
-  "fluencyCoherence": <0-9 in 0.5 increments>,
-  "lexicalResource": <0-9 in 0.5 increments>,
-  "grammaticalRangeAccuracy": <0-9 in 0.5 increments>,
-  "pronunciation": <0-9 in 0.5 increments>,
-  "overallBand": <0-9 in 0.5 increments>,
-  "strengths": ["short point", "short point"],
-  "improvements": ["short action point", "short action point", "short action point"],
-  "feedback": "A concise but specific teacher-facing evaluation in 180-260 words."
-}
+        const openai = new OpenAI({ apiKey })
+        const completion = await openai.chat.completions.create({
+            model: 'gpt-4o-mini',
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.3,
+        })
 
-Be concrete. Quote or reference details from the transcript. If pronunciation cannot be fully verified from transcript alone, infer cautiously and say so in the feedback.`
-
-        const result = await model.generateContent(prompt)
-        const text = result.response.text()
+        const text = completion.choices[0]?.message?.content || ''
         const parsed = JSON.parse(sanitizeJson(text))
 
         const analysis = {
@@ -101,11 +100,7 @@ Be concrete. Quote or reference details from the transcript. If pronunciation ca
             analyzedAt: new Date().toISOString(),
         }
 
-        responses[responseIndex] = {
-            ...response,
-            aiAnalysis: analysis,
-        }
-
+        responses[responseIndex] = { ...targetResponse, aiAnalysis: analysis }
         await studentRef.update({ speakingResponses: responses })
 
         return NextResponse.json({ success: true, analysis })

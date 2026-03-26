@@ -318,6 +318,40 @@ export async function listStudentSpeakingResponses(studentId: string): Promise<S
         .sort((left, right) => (right.createdAt || '').localeCompare(left.createdAt || ''))
 }
 
+/** Fetch speaking responses scoped to a specific list of student UIDs (for teacher views) */
+export async function listSpeakingResponsesByStudentIds(studentIds: string[]): Promise<TeacherSpeakingResponse[]> {
+    if (studentIds.length === 0) return []
+
+    const rows: TeacherSpeakingResponse[] = []
+    // Fetch user docs in chunks of 10 (Firestore 'in' limit)
+    const chunks: string[][] = []
+    for (let i = 0; i < studentIds.length; i += 10) {
+        chunks.push(studentIds.slice(i, i + 10))
+    }
+
+    for (const chunk of chunks) {
+        const usersSnapshot = await getDocs(query(collection(db, 'users'), where('__name__', 'in', chunk)))
+        usersSnapshot.forEach(snapshot => {
+            const data = snapshot.data() as UserSpeakingData
+            const responses = Array.isArray(data.speakingResponses) ? data.speakingResponses : []
+            responses
+                .map(normalizeResponse)
+                .filter((response): response is SpeakingResponse => Boolean(response))
+                .forEach(response => {
+                    rows.push({
+                        ...response,
+                        studentId: response.studentId || snapshot.id,
+                        studentName: response.studentName || data.displayName || data.name || 'Student',
+                        studentEmail: data.email || '',
+                        studentGroup: data.groupName || '',
+                    })
+                })
+        })
+    }
+
+    return rows.sort((left, right) => (right.createdAt || '').localeCompare(left.createdAt || ''))
+}
+
 export async function listAllSpeakingResponses(): Promise<TeacherSpeakingResponse[]> {
     const usersSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'student')))
     const rows: TeacherSpeakingResponse[] = []
@@ -401,4 +435,125 @@ export async function deleteSessionResponses(studentId: string, responseIds: str
 export async function listAnalyzedSpeakingResponses(): Promise<TeacherSpeakingResponse[]> {
     const all = await listAllSpeakingResponses()
     return all.filter(r => r.sentForAnalysis === true)
+}
+
+export async function updateResponseTranscript(studentId: string, responseId: string, transcript: string): Promise<void> {
+    const userRef = doc(db, 'users', studentId)
+    const userSnapshot = await getDoc(userRef)
+    if (!userSnapshot.exists()) return
+
+    const data = userSnapshot.data() as UserSpeakingData
+    const responses = Array.isArray(data.speakingResponses) ? data.speakingResponses : []
+    const updated = responses.map(r => {
+        const normalized = normalizeResponse(r)
+        if (!normalized) return r
+        return normalized.id === responseId ? { ...normalized, transcript } : normalized
+    })
+    const sanitized = JSON.parse(JSON.stringify(updated)) as SpeakingResponse[]
+    if (userSnapshot.exists()) {
+        await updateDoc(userRef, { speakingResponses: sanitized })
+    }
+}
+
+export async function saveAnalysisToResponse(studentId: string, responseId: string, analysis: SpeakingAiAnalysis): Promise<void> {
+    const userRef = doc(db, 'users', studentId)
+    const userSnapshot = await getDoc(userRef)
+    if (!userSnapshot.exists()) return
+
+    const data = userSnapshot.data() as UserSpeakingData
+    const responses = Array.isArray(data.speakingResponses) ? data.speakingResponses : []
+    const updated = responses.map(r => {
+        const normalized = normalizeResponse(r)
+        if (!normalized) return r
+        return normalized.id === responseId ? { ...normalized, aiAnalysis: analysis } : normalized
+    })
+    const sanitized = JSON.parse(JSON.stringify(updated)) as SpeakingResponse[]
+    await updateDoc(userRef, { speakingResponses: sanitized })
+}
+
+export interface StudentSpeakingOverview {
+    studentId: string
+    studentName: string
+    studentEmail: string
+    studentGroup: string
+    totalResponses: number
+    totalSessions: number
+    avgSpeakingSeconds: number
+    totalWarnings: number
+    avgBand: number | null
+    hasAnalysis: boolean
+    lastActivity: string
+}
+
+export async function listAllStudentSpeakingOverview(): Promise<StudentSpeakingOverview[]> {
+    const all = await listAllSpeakingResponses()
+
+    const map = new Map<string, {
+        studentName: string
+        studentEmail: string
+        studentGroup: string
+        responses: TeacherSpeakingResponse[]
+    }>()
+
+    for (const r of all) {
+        if (!map.has(r.studentId)) {
+            map.set(r.studentId, {
+                studentName: r.studentName,
+                studentEmail: r.studentEmail || '',
+                studentGroup: r.studentGroup || '',
+                responses: [],
+            })
+        }
+        map.get(r.studentId)!.responses.push(r)
+    }
+
+    const SESSION_WINDOW_MS = 30 * 60 * 1000
+    const result: StudentSpeakingOverview[] = []
+
+    for (const [studentId, entry] of map) {
+        const responses = entry.responses
+        const sorted = responses.slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+
+        // Count distinct sessions (same grouping logic as speaking-log)
+        let sessionCount = 0
+        const sessionGroups: string[] = []
+        for (const r of sorted) {
+            const t = new Date(r.createdAt).getTime()
+            const match = sessionGroups.findIndex((lastTime, idx) => {
+                const groups = sorted.filter((s, i) => i < idx + 1)
+                const last = groups[groups.length - 1]
+                return last?.assignmentId === r.assignmentId &&
+                    Math.abs(new Date(last.createdAt).getTime() - t) < SESSION_WINDOW_MS
+            })
+            if (match === -1) {
+                sessionCount++
+                sessionGroups.push(r.createdAt)
+            }
+        }
+
+        const totalSpeaking = responses.reduce((sum, r) => sum + (r.speakingSeconds || 0), 0)
+        const avgSpeaking = responses.length > 0 ? Math.round(totalSpeaking / responses.length) : 0
+        const totalWarnings = responses.reduce((sum, r) => sum + (r.warningCount || 0), 0)
+        const analyzed = responses.filter(r => r.aiAnalysis)
+        const avgBand = analyzed.length > 0
+            ? Math.round((analyzed.reduce((sum, r) => sum + (r.aiAnalysis!.overallBand || 0), 0) / analyzed.length) * 10) / 10
+            : null
+        const lastActivity = responses.reduce((max, r) => r.createdAt > max ? r.createdAt : max, '')
+
+        result.push({
+            studentId,
+            studentName: entry.studentName,
+            studentEmail: entry.studentEmail,
+            studentGroup: entry.studentGroup,
+            totalResponses: responses.length,
+            totalSessions: sessionCount,
+            avgSpeakingSeconds: avgSpeaking,
+            totalWarnings,
+            avgBand,
+            hasAnalysis: analyzed.length > 0,
+            lastActivity,
+        })
+    }
+
+    return result.sort((a, b) => b.lastActivity.localeCompare(a.lastActivity))
 }

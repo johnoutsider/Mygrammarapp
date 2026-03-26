@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import TeacherLayout from '@/components/TeacherLayout'
-import { listAnalyzedSpeakingResponses, TeacherSpeakingResponse } from '@/lib/speakingService'
+import { listAllSpeakingResponses, TeacherSpeakingResponse } from '@/lib/speakingService'
 
 const SESSION_WINDOW_MS = 30 * 60 * 1000
 
@@ -14,6 +14,8 @@ interface SessionGroup {
     createdAt: string
     responses: TeacherSpeakingResponse[]
     totalWarnings: number
+    hasAnalysis: boolean
+    allSent: boolean
 }
 
 function groupIntoSessions(responses: TeacherSpeakingResponse[]): SessionGroup[] {
@@ -29,6 +31,8 @@ function groupIntoSessions(responses: TeacherSpeakingResponse[]): SessionGroup[]
         if (existing) {
             existing.responses.push(r)
             existing.totalWarnings += r.warningCount
+            if (r.aiAnalysis) existing.hasAnalysis = true
+            if (!r.sentForAnalysis) existing.allSent = false
         } else {
             groups.push({
                 id: r.id,
@@ -37,6 +41,8 @@ function groupIntoSessions(responses: TeacherSpeakingResponse[]): SessionGroup[]
                 createdAt: r.createdAt,
                 responses: [r],
                 totalWarnings: r.warningCount,
+                hasAnalysis: Boolean(r.aiAnalysis),
+                allSent: Boolean(r.sentForAnalysis),
             })
         }
     }
@@ -61,7 +67,7 @@ export default function TeacherStudentSessionsPage() {
     useEffect(() => {
         const load = async () => {
             try {
-                const all = await listAnalyzedSpeakingResponses()
+                const all = await listAllSpeakingResponses()
                 setResponses(all.filter(r => r.studentId === params.studentId))
             } catch (err) {
                 console.error(err)
@@ -116,31 +122,47 @@ export default function TeacherStudentSessionsPage() {
                                     <th className="px-5 py-3 text-left hidden md:table-cell">Date</th>
                                     <th className="px-5 py-3 text-left hidden md:table-cell">Questions</th>
                                     <th className="px-5 py-3 text-left hidden md:table-cell">Warnings</th>
+                                    <th className="px-5 py-3 text-center hidden md:table-cell">Status</th>
                                     <th className="px-5 py-3 text-right">Action</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
                                 {sessions.map(session => (
                                     <tr key={session.id} className="hover:bg-slate-50 transition-colors">
-                                        <td className="px-5 py-4 align-top">
+                                        <td className="px-5 py-4 align-middle">
                                             <span className="rounded-full bg-teal-50 text-teal-700 px-2.5 py-1 text-xs font-semibold whitespace-nowrap">
                                                 {session.partLabel || '—'}
                                             </span>
                                         </td>
-                                        <td className="px-5 py-4 align-top hidden md:table-cell text-xs text-slate-500 whitespace-nowrap">
+                                        <td className="px-5 py-4 align-middle hidden md:table-cell text-xs text-slate-500 whitespace-nowrap">
                                             {formatDate(session.createdAt)}
                                         </td>
-                                        <td className="px-5 py-4 align-top hidden md:table-cell">
+                                        <td className="px-5 py-4 align-middle hidden md:table-cell">
                                             <span className="text-xs text-slate-600 font-medium">
                                                 {session.responses.length} question{session.responses.length !== 1 ? 's' : ''}
                                             </span>
                                         </td>
-                                        <td className="px-5 py-4 align-top hidden md:table-cell">
+                                        <td className="px-5 py-4 align-middle hidden md:table-cell">
                                             <span className={`text-xs font-semibold ${session.totalWarnings > 0 ? 'text-amber-600' : 'text-slate-400'}`}>
                                                 {session.totalWarnings}
                                             </span>
                                         </td>
-                                        <td className="px-5 py-4 align-top text-right">
+                                        <td className="px-5 py-4 align-middle text-center hidden md:table-cell">
+                                            {session.hasAnalysis ? (
+                                                <span className="inline-flex items-center rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold px-2.5 py-1">
+                                                    Analyzed
+                                                </span>
+                                            ) : session.allSent ? (
+                                                <span className="inline-flex items-center rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-xs font-semibold px-2.5 py-1">
+                                                    Pending
+                                                </span>
+                                            ) : (
+                                                <span className="inline-flex items-center rounded-full bg-slate-100 text-slate-400 text-xs font-semibold px-2.5 py-1">
+                                                    Not Sent
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td className="px-5 py-4 align-middle text-right">
                                             <button
                                                 type="button"
                                                 onClick={() => router.push(`/teacher/speaking/logs/${params.studentId}/${session.id}`)}

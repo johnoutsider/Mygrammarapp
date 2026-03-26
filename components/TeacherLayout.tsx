@@ -67,7 +67,7 @@ const navGroups = [
                     </svg>
                 )
             },
-            { href: '/teacher/game', label: 'Live Game', icon: <Gamepad2 className="w-4 h-4" /> },
+            { href: '/teacher/game', label: 'Live Game', icon: <Gamepad2 className="w-4 h-4" />, permKey: 'canHostGames' },
             { href: '/teacher/game/reports', label: 'Reports', icon: <BarChart2 className="w-4 h-4" /> },
         ]
     },
@@ -82,7 +82,7 @@ const navGroups = [
         ),
         links: [
             {
-                href: '/teacher/speaking', label: 'Speaking Practice', icon: (
+                href: '/teacher/speaking', label: 'Speaking Practice', permKey: 'canManageSpeaking', icon: (
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
                         <path d="M12 14a3 3 0 003-3V7a3 3 0 10-6 0v4a3 3 0 003 3z" strokeLinecap="round" strokeLinejoin="round" />
                         <path d="M19 11a7 7 0 01-14 0M12 18v3M8 21h8" strokeLinecap="round" strokeLinejoin="round" />
@@ -90,7 +90,7 @@ const navGroups = [
                 )
             },
             {
-                href: '/teacher/speaking/logs', label: 'Student Logs', icon: (
+                href: '/teacher/speaking/logs', label: 'Student Logs', permKey: 'canManageSpeaking', icon: (
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
                         <path d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2" strokeLinecap="round" strokeLinejoin="round" />
                         <rect x="9" y="3" width="6" height="4" rx="1" />
@@ -197,12 +197,12 @@ export default function TeacherLayout({ children, title = 'Teacher Panel' }: Tea
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
     const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
 
-    // Track which groups are open — default all open
+    // Track which groups are open — all collapsed by default, active group auto-expands
     const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
-        writing: true,
-        grammar: true,
-        speaking: true,
-        tools: true,
+        writing: false,
+        grammar: false,
+        speaking: false,
+        tools: false,
     })
 
     const isActive = (href: string) => {
@@ -230,11 +230,30 @@ export default function TeacherLayout({ children, title = 'Teacher Panel' }: Tea
             if (user?.uid) {
                 const { getUserProfile } = await import('@/lib/auth')
                 const profile = await getUserProfile(user.uid)
+                if (!profile) return
+
+                // Redirect if account status is not approved
+                if (profile.role === 'teacher') {
+                    if (profile.status === 'pending') {
+                        router.replace('/pending-approval')
+                        return
+                    }
+                    if (profile.status === 'suspended') {
+                        router.replace('/suspended')
+                        return
+                    }
+                }
+                // Redirect admin to admin panel
+                if (profile.role === 'admin') {
+                    router.replace('/admin')
+                    return
+                }
+
                 setUserProfile(profile)
             }
         }
         fetchProfile()
-    }, [user])
+    }, [user, router])
 
     useEffect(() => { setMobileSidebarOpen(false) }, [pathname])
 
@@ -352,14 +371,20 @@ export default function TeacherLayout({ children, title = 'Teacher Panel' }: Tea
                                     {/* Child links */}
                                     {!sidebarCollapsed && isOpen && (
                                         <ul className="mt-0.5 ml-3 pl-3 space-y-0.5 border-l border-white/10">
-                                            {group.links.map(({ href, label, icon }) => {
-                                                const active = isActive(href)
-                                                return (
-                                                    <li key={href}>
-                                                        <NavLink href={href} label={label} icon={icon} active={active} collapsed={false} small />
-                                                    </li>
-                                                )
-                                            })}
+                                            {group.links
+                                                .filter(({ permKey }: any) => {
+                                                    if (!permKey) return true
+                                                    if (!userProfile?.permissions) return true
+                                                    return userProfile.permissions[permKey as keyof typeof userProfile.permissions] !== false
+                                                })
+                                                .map(({ href, label, icon }: any) => {
+                                                    const active = isActive(href)
+                                                    return (
+                                                        <li key={href}>
+                                                            <NavLink href={href} label={label} icon={icon} active={active} collapsed={false} small />
+                                                        </li>
+                                                    )
+                                                })}
                                         </ul>
                                     )}
                                 </li>
