@@ -1,5 +1,5 @@
 import { db } from './firebase';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, doc, getDoc } from 'firebase/firestore';
 
 export async function submitQuizForReview(
     quiz: { title: string; questions: any[] },
@@ -93,4 +93,11 @@ export async function deleteTeacherQuiz(quizId: string): Promise<void> {
     const { db } = await import('./firebase')
     const { doc, deleteDoc } = await import('firebase/firestore')
     await deleteDoc(doc(db, 'quizzes', quizId))
+}
+
+export async function getTeacherQuiz(quizId: string) {
+    const ref = doc(db, 'quizzes', quizId)
+    const snap = await getDoc(ref)
+    if (!snap.exists()) throw new Error('Quiz not found')
+    return { id: snap.id, ...snap.data() }
 }
