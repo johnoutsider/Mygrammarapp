@@ -157,8 +157,7 @@ export default function CreateQuizPage() {
                             value={title}
                             onChange={e => setTitle(e.target.value)}
                             placeholder="Add a descriptive title"
-                            className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-white text-slate-500 focus:outline-none focus:ring-2 focus:ring-teal-400 resize-none"
-
+                            className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-white text-slate-500 focus:outline-none focus:ring-2 focus:ring-teal-400"
                         />
                     </div>
 
