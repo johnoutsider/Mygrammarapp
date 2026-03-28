@@ -8,7 +8,7 @@ import { onAuthStateChanged } from 'firebase/auth'
 import { updateTeacherQuiz } from '@/lib/quizService'
 import TeacherLayout from '@/components/TeacherLayout'
 import QuestionEditorCard from '@/components/teacher/my-quizzes/QuestionEditorCard'
-import AddEditQuestionModal from '@/components/teacher/my-quizzes/AddEditQuestionModal'
+import QuestionModal from '@/components/game/create/QuestionModal'
 import CsvImportModal from '@/components/teacher/my-quizzes/CsvImportModal'
 
 const COVER_COLORS = [
@@ -422,11 +422,11 @@ export default function QuizEditorPage() {
 
             {/* ── Modals ── */}
             {addEditModal.open && (
-                <AddEditQuestionModal
-                    mode={addEditModal.mode}
-                    questionIndex={addEditModal.index}
-                    existingQuestion={currentQuestion}
-                    onSave={handleSaveQuestion}
+                <QuestionModal
+                    isOpen={true}
+                    initialQuestion={currentQuestion}
+                    globalTimeLimit={20}
+                    onSave={(question) => handleSaveQuestion(question, addEditModal.index)}
                     onClose={() => setAddEditModal({ open: false, mode: 'add', index: null })}
                 />
             )}
