@@ -23,6 +23,7 @@ export interface ActiveGame {
     quizId: string
     quizTitle: string
     hostId: string
+    classIds: string[]          // teacher's class IDs — only students in these classes can join
     status: GameStatus
     participation: Participation
     currentQuestion: number
@@ -54,7 +55,8 @@ export async function createGame(
     quizTitle: string,
     totalQuestions: number,
     hostId: string,
-    participation: Participation = 'solo'
+    participation: Participation = 'solo',
+    classIds: string[] = []
 ) {
     const sessionId = Math.random().toString(36).slice(2, 10)
     await set(ref(rtdb, 'activeGame'), {
@@ -62,6 +64,7 @@ export async function createGame(
         quizId,
         quizTitle,
         hostId,
+        classIds,
         participation,
         status: 'lobby',
         currentQuestion: 0,

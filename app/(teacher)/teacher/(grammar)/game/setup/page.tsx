@@ -150,6 +150,11 @@ function QuizSetupInner() {
         setLaunching(true)
         const count = Math.max(1, Math.min(questionsCount, quizTotal))
 
+        // Fetch teacher's classIds so only their students can join
+        const { getUserProfile } = await import('@/lib/auth')
+        const teacherProfile = await getUserProfile(auth.currentUser.uid)
+        const classIds: string[] = teacherProfile?.classIds || []
+
         if (participation === 'team') {
             router.push(
                 `/teacher/game/teams?id=${quizId}&title=${encodeURIComponent(quizTitle)}&mode=${mode}&total=${count}`
@@ -159,7 +164,7 @@ function QuizSetupInner() {
             const snap = await getDoc(doc(db, 'quizzes', quizId))
             const questions: any[] = snap.data()?.questions || []
             const finalCount = Math.min(count, questions.length)
-            await createGame(quizId, quizTitle, finalCount, auth.currentUser.uid, 'solo')
+            await createGame(quizId, quizTitle, finalCount, auth.currentUser.uid, 'solo', classIds)
             router.push('/teacher/game/host')
         }
     }

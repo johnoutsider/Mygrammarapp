@@ -13,6 +13,7 @@ export default function PlayLobby() {
     const [currentUser, setCurrentUser] = useState<any>(null)
     const [joined, setJoined] = useState(false)
     const [playerCount, setPlayerCount] = useState(0)
+    const [notEligible, setNotEligible] = useState(false)
 
     // Auth check
     useEffect(() => {
@@ -29,7 +30,7 @@ export default function PlayLobby() {
             setGame(g)
             setPlayerCount(Object.keys(g?.players || {}).length)
 
-            // Game started — move to game screen
+            // Game started — move to game screen (only if already joined)
             if (g?.status === 'question') {
                 router.push('/play/game')
             }
@@ -44,18 +45,40 @@ export default function PlayLobby() {
 
     // Auto-join when user + game are both ready
     useEffect(() => {
-        if (!currentUser || !game || joined) return
+        if (!currentUser || !game || joined || notEligible) return
         const alreadyIn = game.players?.[currentUser.uid]
         if (alreadyIn) { setJoined(true); return }
 
         const doJoin = async () => {
             const { getUserProfile } = await import('@/lib/auth')
             const profile = await getUserProfile(currentUser.uid)
+
+            // Check if this student belongs to the teacher's class
+            const studentClassId = profile?.classId
+            const gameClassIds: string[] = game.classIds || []
+            if (gameClassIds.length > 0 && (!studentClassId || !gameClassIds.includes(studentClassId))) {
+                setNotEligible(true)
+                setTimeout(() => router.push('/dashboard'), 4000)
+                return
+            }
+
             await joinGame(currentUser.uid, profile?.name || currentUser.displayName || 'Student')
             setJoined(true)
         }
         doJoin()
-    }, [currentUser, game, joined])
+    }, [currentUser, game, joined, notEligible, router])
+
+    if (notEligible) {
+        return (
+            <div className="min-h-screen bg-indigo-900 flex items-center justify-center">
+                <div className="text-white text-center px-6">
+                    <div className="text-6xl mb-4">🚫</div>
+                    <h2 className="text-2xl font-bold mb-2">Not your game</h2>
+                    <p className="text-indigo-300 text-sm">This game is for a different class. Redirecting you back...</p>
+                </div>
+            </div>
+        )
+    }
 
     if (!game) {
         return (

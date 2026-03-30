@@ -71,7 +71,10 @@ function TeamsInner() {
             const snap = await getDoc(doc(db, 'quizzes', quizId))
             const questions: any[] = snap.data()?.questions || []
             const count = total === 'all' ? questions.length : Math.min(parseInt(total), questions.length)
-            await createGame(quizId, quizTitle, count, auth.currentUser.uid, 'team')
+            const { getUserProfile } = await import('@/lib/auth')
+            const teacherProfile = await getUserProfile(auth.currentUser.uid)
+            const classIds: string[] = teacherProfile?.classIds || []
+            await createGame(quizId, quizTitle, count, auth.currentUser.uid, 'team', classIds)
             setGameReady(true)
         }
         init()
