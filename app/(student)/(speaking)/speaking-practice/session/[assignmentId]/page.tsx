@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import Script from 'next/script'
 import { Video, Mic } from 'lucide-react'
+import { useAuthState } from 'react-firebase-hooks/auth'
 import StudentLayout from '@/components/StudentLayout'
 import { useAccessGuard } from '@/hooks/useAccessGuard'
 import { getUserProfile } from '@/lib/auth'
@@ -81,6 +82,7 @@ export default function SpeakingSessionPage() {
     const params = useParams<{ assignmentId: string }>()
     const searchParams = useSearchParams()
     const router = useRouter()
+    const [user, authLoading] = useAuthState(auth)
     const videoRef = useRef<HTMLVideoElement | null>(null)
     const previewVideoRef = useRef<HTMLVideoElement | null>(null)
     const previewStreamRef = useRef<MediaStream | null>(null)
@@ -364,9 +366,17 @@ export default function SpeakingSessionPage() {
     }, [addLog, updateRiskLevel])
 
     useEffect(() => {
+        if (authLoading) return
+
         const loadAssignment = async () => {
+            if (!user?.uid) {
+                setLoading(false)
+                return
+            }
+
             try {
-                const nextAssignment = await getStudentSpeakingAssignmentById(params.assignmentId)
+                setLoading(true)
+                const nextAssignment = await getStudentSpeakingAssignmentById(params.assignmentId, user.uid)
                 if (!nextAssignment) {
                     setError('Speaking prompt not found.')
                     return
@@ -389,7 +399,7 @@ export default function SpeakingSessionPage() {
         }
 
         void loadAssignment()
-    }, [params.assignmentId, router, searchParams])
+    }, [authLoading, params.assignmentId, router, searchParams, user?.uid])
 
     useEffect(() => {
         if (!assignment) return
@@ -587,7 +597,7 @@ export default function SpeakingSessionPage() {
         }
     }, [addLog, assignment, currentStep, disableDetection, handleFaceMeshResults, loading, saveAndExit, scriptsReady, sessionStarted, stepIndex, stopMedia, updateRiskLevel])
 
-    if (loading) {
+    if (loading || authLoading) {
         return (
             <StudentLayout title="Speaking Session">
                 <div className="min-h-[60vh] flex items-center justify-center">

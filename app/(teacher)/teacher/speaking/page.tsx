@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useAuthState } from 'react-firebase-hooks/auth'
 import TeacherLayout from '@/components/TeacherLayout'
 import SpeakingAssignmentForm from '@/components/speaking/SpeakingAssignmentForm'
 import { auth } from '@/lib/firebase'
@@ -15,6 +16,7 @@ import {
 const TEAL = '#1D9E75'
 
 export default function TeacherSpeakingPage() {
+    const [user, authLoading] = useAuthState(auth)
     const [assignments, setAssignments] = useState<SpeakingAssignment[]>([])
     const [topics, setTopics] = useState<string[]>([])
     const [loading, setLoading] = useState(true)
@@ -23,7 +25,12 @@ export default function TeacherSpeakingPage() {
 
     const loadData = async () => {
         try {
-            const teacherId = auth.currentUser?.uid
+            const teacherId = user?.uid
+            if (!teacherId) {
+                setAssignments([])
+                setTopics([])
+                return
+            }
             const [nextAssignments, nextTopics] = await Promise.all([
                 listSpeakingAssignments(teacherId),
                 listSpeakingTopics(teacherId),
@@ -40,8 +47,9 @@ export default function TeacherSpeakingPage() {
     }
 
     useEffect(() => {
+        if (authLoading) return
         void loadData()
-    }, [])
+    }, [authLoading, user?.uid])
 
     const handleCreate = async (input: {
         partLabel: string
@@ -51,7 +59,7 @@ export default function TeacherSpeakingPage() {
         prepSeconds: number
         speakingSeconds: number
     }) => {
-        const teacherId = auth.currentUser?.uid
+        const teacherId = user?.uid
         if (!teacherId) throw new Error('You must be signed in as a teacher.')
 
         await createSpeakingAssignment({
@@ -74,7 +82,7 @@ export default function TeacherSpeakingPage() {
     const handleActivate = async (assignmentId: string) => {
         setActivatingId(assignmentId)
         try {
-            await activateSpeakingAssignment(assignmentId, auth.currentUser?.uid)
+            await activateSpeakingAssignment(assignmentId, user?.uid)
             await loadData()
         } catch (activateError) {
             console.error(activateError)
@@ -96,7 +104,7 @@ export default function TeacherSpeakingPage() {
                     <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">{error}</div>
                 )}
 
-                {loading ? (
+                {loading || authLoading ? (
                     <div className="py-16 flex justify-center">
                         <div className="animate-spin rounded-full h-10 w-10 border-b-2" style={{ borderColor: TEAL }} />
                     </div>

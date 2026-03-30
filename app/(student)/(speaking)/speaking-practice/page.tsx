@@ -2,10 +2,12 @@
 
 import { Suspense, useEffect, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { useAuthState } from 'react-firebase-hooks/auth'
 import StudentLayout from '@/components/StudentLayout'
 import SpeakingCountdownRing from '@/components/speaking/SpeakingCountdownRing'
 import SpeakingPromptBubble from '@/components/speaking/SpeakingPromptBubble'
 import { useAccessGuard } from '@/hooks/useAccessGuard'
+import { auth } from '@/lib/firebase'
 import {
     getStudentActiveSpeakingAssignment,
     getStudentSpeakingAssignmentById,
@@ -26,6 +28,7 @@ function SpeakingPracticeContent() {
     const searchParams = useSearchParams()
     const assignmentId = searchParams.get('assignmentId')
     const stepParam = searchParams.get('step')
+    const [user, authLoading] = useAuthState(auth)
     const [assignment, setAssignment] = useState<SpeakingAssignment | null>(null)
     const [remainingSeconds, setRemainingSeconds] = useState(0)
     const [loading, setLoading] = useState(true)
@@ -38,11 +41,20 @@ function SpeakingPracticeContent() {
     const currentStep = assignment?.questionSteps[currentStepIndex] ?? null
 
     useEffect(() => {
+        if (authLoading) return
+
         const loadAssignment = async () => {
+            if (!user?.uid) {
+                setAssignment(null)
+                setLoading(false)
+                return
+            }
+
             try {
+                setLoading(true)
                 const nextAssignment = assignmentId
-                    ? await getStudentSpeakingAssignmentById(assignmentId)
-                    : await getStudentActiveSpeakingAssignment()
+                    ? await getStudentSpeakingAssignmentById(assignmentId, user.uid)
+                    : await getStudentActiveSpeakingAssignment(user.uid)
 
                 if (assignmentId && nextAssignment && nextAssignment.id !== assignmentId) {
                     const nextParams = new URLSearchParams()
@@ -66,7 +78,7 @@ function SpeakingPracticeContent() {
         }
 
         void loadAssignment()
-    }, [assignmentId, router, stepParam])
+    }, [assignmentId, authLoading, router, stepParam, user?.uid])
 
     useEffect(() => {
         if (!assignment) return
@@ -103,7 +115,7 @@ function SpeakingPracticeContent() {
         return () => clearInterval(timer)
     }, [assignment, currentStep, currentStepIndex, remainingSeconds, router])
 
-    if (loading) {
+    if (loading || authLoading) {
         return (
             <StudentLayout title="Speaking Practice">
                 <div className="min-h-[60vh] flex items-center justify-center">
