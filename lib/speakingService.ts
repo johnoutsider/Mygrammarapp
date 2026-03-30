@@ -8,7 +8,9 @@ import {
     updateDoc,
     where,
 } from 'firebase/firestore'
-import { db } from './firebase'
+import { auth, db } from './firebase'
+import { getUserProfile } from './auth'
+import { getStudentTeacherId } from './classService'
 import {
     createSpeakingTopic as createSharedSpeakingTopic,
     deleteSpeakingTopicByTitle,
@@ -274,6 +276,42 @@ export async function getActiveSpeakingAssignment(teacherId?: string): Promise<S
 export async function getSpeakingAssignmentById(assignmentId: string, teacherId?: string): Promise<SpeakingAssignment | null> {
     const { assignments = [] } = await readAssignmentsDoc(teacherId)
     return assignments.find(assignment => assignment.id === assignmentId) ?? null
+}
+
+export async function resolveStudentSpeakingTeacherId(studentId?: string | null): Promise<string | undefined> {
+    const uid = studentId ?? auth.currentUser?.uid
+    if (!uid) return undefined
+
+    const profile = await getUserProfile(uid)
+    const classId = profile?.classId
+    if (!classId || classId === 'default-class') return undefined
+
+    const teacherId = await getStudentTeacherId(classId)
+    return teacherId || undefined
+}
+
+export async function getStudentActiveSpeakingAssignment(studentId?: string | null): Promise<SpeakingAssignment | null> {
+    const teacherId = await resolveStudentSpeakingTeacherId(studentId)
+    if (teacherId) {
+        return getActiveSpeakingAssignment(teacherId)
+    }
+
+    return getActiveSpeakingAssignment()
+}
+
+export async function getStudentSpeakingAssignmentById(
+    assignmentId: string,
+    studentId?: string | null
+): Promise<SpeakingAssignment | null> {
+    const teacherId = await resolveStudentSpeakingTeacherId(studentId)
+
+    if (teacherId) {
+        const scopedAssignment = await getSpeakingAssignmentById(assignmentId, teacherId)
+        if (scopedAssignment) return scopedAssignment
+        return getActiveSpeakingAssignment(teacherId)
+    }
+
+    return getSpeakingAssignmentById(assignmentId)
 }
 
 export async function createSpeakingAssignment(input: Omit<SpeakingAssignment, 'id' | 'createdAt' | 'questionText'>, teacherId?: string): Promise<SpeakingAssignment> {

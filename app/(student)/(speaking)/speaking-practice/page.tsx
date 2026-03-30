@@ -6,7 +6,11 @@ import StudentLayout from '@/components/StudentLayout'
 import SpeakingCountdownRing from '@/components/speaking/SpeakingCountdownRing'
 import SpeakingPromptBubble from '@/components/speaking/SpeakingPromptBubble'
 import { useAccessGuard } from '@/hooks/useAccessGuard'
-import { getActiveSpeakingAssignment, getSpeakingAssignmentById, SpeakingAssignment } from '@/lib/speakingService'
+import {
+    getStudentActiveSpeakingAssignment,
+    getStudentSpeakingAssignmentById,
+    SpeakingAssignment,
+} from '@/lib/speakingService'
 
 function getValidStep(stepParam: string | null, totalSteps: number): number {
     const parsed = Number(stepParam ?? '0')
@@ -21,36 +25,36 @@ function SpeakingPracticeContent() {
     const router = useRouter()
     const searchParams = useSearchParams()
     const assignmentId = searchParams.get('assignmentId')
+    const stepParam = searchParams.get('step')
     const [assignment, setAssignment] = useState<SpeakingAssignment | null>(null)
     const [remainingSeconds, setRemainingSeconds] = useState(0)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
 
     const currentStepIndex = useMemo(() => {
-        return getValidStep(searchParams.get('step'), assignment?.questionSteps.length ?? 1)
-    }, [assignment?.questionSteps.length, searchParams])
+        return getValidStep(stepParam, assignment?.questionSteps.length ?? 1)
+    }, [assignment?.questionSteps.length, stepParam])
 
     const currentStep = assignment?.questionSteps[currentStepIndex] ?? null
 
     useEffect(() => {
         const loadAssignment = async () => {
             try {
-                // Resolve the student's teacher for per-teacher speaking assignments
-                const { getUserProfile } = await import('@/lib/auth')
-                const { getStudentTeacherId } = await import('@/lib/classService')
-                const { auth: firebaseAuth } = await import('@/lib/firebase')
-                const user = firebaseAuth.currentUser
-                let teacherId: string | undefined
-                if (user) {
-                    const profile = await getUserProfile(user.uid)
-                    if (profile?.classId) {
-                        const tid = await getStudentTeacherId(profile.classId)
-                        if (tid) teacherId = tid
-                    }
-                }
                 const nextAssignment = assignmentId
-                    ? await getSpeakingAssignmentById(assignmentId, teacherId)
-                    : await getActiveSpeakingAssignment(teacherId)
+                    ? await getStudentSpeakingAssignmentById(assignmentId)
+                    : await getStudentActiveSpeakingAssignment()
+
+                if (assignmentId && nextAssignment && nextAssignment.id !== assignmentId) {
+                    const nextParams = new URLSearchParams()
+                    nextParams.set('assignmentId', nextAssignment.id)
+
+                    if (stepParam) {
+                        nextParams.set('step', stepParam)
+                    }
+
+                    router.replace(`/speaking-practice?${nextParams.toString()}`)
+                }
+
                 setAssignment(nextAssignment)
                 setRemainingSeconds(nextAssignment?.prepSeconds ?? 0)
             } catch (loadError) {
@@ -62,7 +66,7 @@ function SpeakingPracticeContent() {
         }
 
         void loadAssignment()
-    }, [assignmentId])
+    }, [assignmentId, router, stepParam])
 
     useEffect(() => {
         if (!assignment) return
@@ -75,12 +79,12 @@ function SpeakingPracticeContent() {
         const hasCamera = typeof window !== 'undefined' && sessionStorage.getItem('speaking_camera_id')
         const hasMic = typeof window !== 'undefined' && sessionStorage.getItem('speaking_mic_id')
         if (!hasCamera || !hasMic) {
-            const dest = assignmentId
-                ? `/speaking-practice/session/${assignment.id}?assignmentId=${assignmentId}`
-                : `/speaking-practice/session/${assignment.id}`
+            const nextParams = new URLSearchParams()
+            nextParams.set('step', String(currentStepIndex))
+            const dest = `/speaking-practice/session/${assignment.id}?${nextParams.toString()}`
             router.replace(dest)
         }
-    }, [loading, assignment, assignmentId, router])
+    }, [loading, assignment, currentStepIndex, router])
 
     useEffect(() => {
         if (!assignment || !currentStep || remainingSeconds <= 0) return

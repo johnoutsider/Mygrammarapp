@@ -10,7 +10,7 @@ import { getUserProfile } from '@/lib/auth'
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { auth, storage } from '@/lib/firebase'
 import {
-    getSpeakingAssignmentById,
+    getStudentSpeakingAssignmentById,
     saveSpeakingResponse,
     SpeakingAssignment,
     SpeakingQuestionStep,
@@ -366,13 +366,20 @@ export default function SpeakingSessionPage() {
     useEffect(() => {
         const loadAssignment = async () => {
             try {
-                const nextAssignment = await getSpeakingAssignmentById(params.assignmentId)
+                const nextAssignment = await getStudentSpeakingAssignmentById(params.assignmentId)
                 if (!nextAssignment) {
                     setError('Speaking prompt not found.')
                     return
                 }
                 setAssignment(nextAssignment)
                 setRemainingSeconds(nextAssignment.speakingSeconds)
+
+                if (nextAssignment.id !== params.assignmentId) {
+                    const nextParams = searchParams.toString()
+                    router.replace(
+                        `/speaking-practice/session/${nextAssignment.id}${nextParams ? `?${nextParams}` : ''}`
+                    )
+                }
             } catch (loadError) {
                 console.error(loadError)
                 setError('Failed to load the speaking session.')
@@ -382,7 +389,7 @@ export default function SpeakingSessionPage() {
         }
 
         void loadAssignment()
-    }, [params.assignmentId])
+    }, [params.assignmentId, router, searchParams])
 
     useEffect(() => {
         if (!assignment) return
@@ -695,7 +702,10 @@ export default function SpeakingSessionPage() {
                                 }
                                 stopPreview()
                                 // Redirect to prep page — it will show the question + timer
-                                router.replace(`/speaking-practice?assignmentId=${params.assignmentId}`)
+                                const nextParams = new URLSearchParams()
+                                nextParams.set('assignmentId', assignment.id)
+                                nextParams.set('step', String(stepIndex))
+                                router.replace(`/speaking-practice?${nextParams.toString()}`)
                             }}
                             disabled={!scriptsReady || permissionDenied}
                             className="w-full py-4 bg-[#5b7ec9] hover:bg-[#4a6db8] text-white font-semibold rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-base"
