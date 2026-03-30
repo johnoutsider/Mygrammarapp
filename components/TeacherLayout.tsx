@@ -35,7 +35,44 @@ const navGroups = [
                     </svg>
                 )
             },
-
+            {
+                href: '/teacher/essay-approvals', label: 'Essay Approvals', icon: (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
+                        <path d="M9 12l2 2 4-4m-7 4h10a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v9a2 2 0 002 2z" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                )
+            },
+            {
+                href: '/teacher/topics', label: 'Essay Topics', icon: (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
+                        <path d="M7 7h10M7 12h10M7 17h6" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                )
+            },
+            {
+                href: '/teacher/scheduler', label: 'Scheduler', icon: (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
+                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                        <path d="M16 2v4M8 2v4M3 10h18" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                )
+            },
+             {
+                href: '/teacher/eva-settings', label: 'EVA Settings', icon: (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
+                        <path d="M12 2a5 5 0 015 5v.5a5 5 0 01-10 0V7a5 5 0 015-5z" />
+                        <path d="M2 20a10 10 0 0120 0" strokeLinecap="round" />
+                    </svg>
+                )
+            },
+            {
+                href: '/teacher/logs', label: 'AI Logs', icon: (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
+                        <path d="M12 9v4M12 17h.01" strokeLinecap="round" strokeLinejoin="round" />
+                        <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                    </svg>
+                )
+            },
         ]
     },
     {
@@ -130,22 +167,7 @@ const navGroups = [
                     </svg>
                 )
             },
-            {
-                href: '/teacher/eva-settings', label: 'EVA Settings', icon: (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
-                        <path d="M12 2a5 5 0 015 5v.5a5 5 0 01-10 0V7a5 5 0 015-5z" />
-                        <path d="M2 20a10 10 0 0120 0" strokeLinecap="round" />
-                    </svg>
-                )
-            },
-            {
-                href: '/teacher/logs', label: 'AI Logs', icon: (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
-                        <path d="M12 9v4M12 17h.01" strokeLinecap="round" strokeLinejoin="round" />
-                        <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-                    </svg>
-                )
-            },
+           
             {
                 href: '/teacher/scheduler', label: 'Task Scheduler', icon: (
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
@@ -219,7 +241,7 @@ export default function TeacherLayout({ children, title = 'Teacher Panel' }: Tea
 
     // Track which groups are open — all collapsed by default, active group auto-expands
     const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
-        writing: false,
+        writing: true,
         grammar: false,
         speaking: false,
         tools: false,
