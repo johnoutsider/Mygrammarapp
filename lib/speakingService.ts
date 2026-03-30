@@ -106,6 +106,33 @@ function getSpeakingTopicsDoc(teacherId: string) {
 const SPEAKING_SETTINGS_DOC_GLOBAL = doc(db, 'settings', 'speakingAssignments')
 const SPEAKING_TOPICS_DOC_GLOBAL = doc(db, 'settings', 'speakingTopics')
 
+function serializeSpeakingAssignment(assignment: SpeakingAssignment) {
+    return {
+        id: assignment.id,
+        teacherId: assignment.teacherId,
+        partLabel: assignment.partLabel,
+        questionText: assignment.questionText,
+        questionSteps: assignment.questionSteps.map((step, index) => ({
+            id: step.id || `step-${index + 1}`,
+            text: step.text,
+        })),
+        prepSeconds: assignment.prepSeconds,
+        speakingSeconds: assignment.speakingSeconds,
+        isActive: assignment.isActive,
+        createdAt: assignment.createdAt,
+        ...(typeof assignment.mainQuestion === 'string' && assignment.mainQuestion.trim()
+            ? { mainQuestion: assignment.mainQuestion.trim() }
+            : {}),
+        ...(typeof assignment.closingLine === 'string' && assignment.closingLine.trim()
+            ? { closingLine: assignment.closingLine.trim() }
+            : {}),
+    }
+}
+
+function sanitizeSpeakingAssignments(assignments: SpeakingAssignment[]) {
+    return assignments.map(serializeSpeakingAssignment)
+}
+
 function createId(prefix: string): string {
     if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
         return `${prefix}-${crypto.randomUUID()}`
@@ -274,11 +301,12 @@ export async function createSpeakingAssignment(input: Omit<SpeakingAssignment, '
         ...item,
         isActive: item.id === assignment.id ? input.isActive : false,
     }))
+    const sanitizedAssignments = sanitizeSpeakingAssignments(assignments)
 
     const docRef = teacherId ? getSpeakingSettingsDoc(teacherId) : SPEAKING_SETTINGS_DOC_GLOBAL
     await setDoc(docRef, {
         activeAssignmentId: input.isActive ? assignment.id : existing.activeAssignmentId ?? null,
-        assignments,
+        assignments: sanitizedAssignments,
     })
 
     return {
@@ -293,11 +321,12 @@ export async function activateSpeakingAssignment(assignmentId: string, teacherId
         ...assignment,
         isActive: assignment.id === assignmentId,
     }))
+    const sanitizedAssignments = sanitizeSpeakingAssignments(assignments)
 
     const docRef = teacherId ? getSpeakingSettingsDoc(teacherId) : SPEAKING_SETTINGS_DOC_GLOBAL
     await setDoc(docRef, {
         activeAssignmentId: assignmentId,
-        assignments,
+        assignments: sanitizedAssignments,
     })
 }
 
