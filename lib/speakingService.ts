@@ -2,6 +2,7 @@ import {
     collection,
     doc,
     getDoc,
+    getDocFromServer,
     getDocs,
     query,
     setDoc,
@@ -240,7 +241,7 @@ function normalizeResponse(raw: unknown): SpeakingResponse | null {
 
 async function readAssignmentsDoc(teacherId?: string): Promise<SpeakingAssignmentsDoc> {
     const docRef = teacherId ? getSpeakingSettingsDoc(teacherId) : SPEAKING_SETTINGS_DOC_GLOBAL
-    const snapshot = await getDoc(docRef)
+    const snapshot = await getDocFromServer(docRef)
     if (!snapshot.exists()) {
         return { activeAssignmentId: null, assignments: [] }
     }
