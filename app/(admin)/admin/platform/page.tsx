@@ -114,7 +114,7 @@ export default function PlatformSettingsPage() {
                         <p className="text-xs text-gray-400 mb-2">Shown in the app header and emails</p>
                         <input type="text" value={settings.platformName}
                             onChange={e => setSettings(s => s ? { ...s, platformName: e.target.value } : s)}
-                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-white text-gray-700" />
                     </div>
                 </div>
 
@@ -128,7 +128,7 @@ export default function PlatformSettingsPage() {
                             onChange={e => setNewAdminEmail(e.target.value)}
                             onKeyDown={e => e.key === 'Enter' && addAdminEmail()}
                             placeholder="admin@example.com"
-                            className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                            className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-white text-gray-700" />
                         <button onClick={addAdminEmail}
                             className="px-3 py-2 rounded-lg text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 transition-colors">
                             <Plus className="w-4 h-4" />

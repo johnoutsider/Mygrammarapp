@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import TeacherLayout from '@/components/TeacherLayout'
 import { auth, db } from '@/lib/firebase'
 import {
-    collection, doc, getDocs,
+    collection, doc, getDocs, query, where,
     updateDoc, serverTimestamp, addDoc,
 } from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
@@ -229,16 +229,31 @@ export default function ApprovalsPage() {
     const loadData = async () => {
         setLoading(true)
         try {
-            // Build user name map
-            const userSnap = await getDocs(collection(db, 'users'))
+            // Scope to teacher's classes
+            const { getUserProfile } = await import('@/lib/auth')
+            const { getStudentsByClassIds } = await import('@/lib/groupService')
+            const profile = await getUserProfile(auth.currentUser!.uid)
+            const classIds: string[] = (profile as any)?.classIds ?? []
+            const myStudents = classIds.length > 0 ? await getStudentsByClassIds(classIds) : []
+
+            // Build user name map from teacher's students
             const nameMap: Record<string, string> = {}
-            userSnap.docs.forEach(d => {
-                const data = d.data() as any
-                nameMap[d.id] = data.displayName || data.name || 'Unknown'
+            myStudents.forEach(s => {
+                nameMap[s.uid] = s.displayName || s.name || 'Unknown'
             })
 
-            // Fetch all quizzes
-            const quizSnap = await getDocs(collection(db, 'quizzes'))
+            // Fetch quizzes scoped to teacher's classes + teacher's own quizzes
+            const quizDocs: any[] = []
+            for (let i = 0; i < classIds.length; i += 30) {
+                const chunk = classIds.slice(i, i + 30)
+                const snap = await getDocs(query(collection(db, 'quizzes'), where('classId', 'in', chunk)))
+                quizDocs.push(...snap.docs)
+            }
+            // Also include teacher's own quizzes
+            const teacherQuizSnap = await getDocs(query(collection(db, 'quizzes'), where('createdBy', '==', auth.currentUser!.uid)))
+            const seenIds = new Set(quizDocs.map(d => d.id))
+            teacherQuizSnap.docs.forEach(d => { if (!seenIds.has(d.id)) quizDocs.push(d) })
+            const quizSnap = { docs: quizDocs }
 
             // Fetch all peer reviews
             const reviewSnap = await getDocs(collection(db, 'reviews'))

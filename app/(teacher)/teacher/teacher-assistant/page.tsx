@@ -134,9 +134,12 @@ export default function TeacherAssistantPage() {
         setTimeout(() => setToast(null), 4000)
     }, [])
 
-    const loadSchedulerData = useCallback(async () => {
+    const loadSchedulerData = useCallback(async (uid?: string) => {
+        const tasksQuery = uid
+            ? query(collection(db, 'scheduledTasks'), where('teacherId', '==', uid), orderBy('createdAt', 'desc'))
+            : query(collection(db, 'scheduledTasks'), orderBy('createdAt', 'desc'))
         const [tasksSnap, exportsSnap] = await Promise.all([
-            getDocs(query(collection(db, 'scheduledTasks'), orderBy('createdAt', 'desc'))),
+            getDocs(tasksQuery),
             getDocs(query(collection(db, 'schedulerExports'), orderBy('createdAt', 'desc'), limit(10))),
         ])
 
@@ -164,22 +167,29 @@ export default function TeacherAssistantPage() {
         setExportsList(nextExports)
     }, [])
 
-    const loadTopics = useCallback(async () => {
-        const snap = await getDocs(query(collection(db, 'topics'), orderBy('createdAt', 'desc')))
+    const loadTopics = useCallback(async (uid?: string) => {
+        const topicsQuery = uid
+            ? query(collection(db, 'topics'), where('teacherId', '==', uid), orderBy('createdAt', 'desc'))
+            : query(collection(db, 'topics'), orderBy('createdAt', 'desc'))
+        const snap = await getDocs(topicsQuery)
         setTopics(snap.docs.map(doc => ({ id: doc.id, name: (doc.data() as any).name || 'Untitled Topic' })))
     }, [])
 
-    const loadGroups = useCallback(async () => {
-        const snap = await getDocs(query(collection(db, 'users'), where('role', '==', 'student')))
-        const groups = [...new Set(
-            snap.docs
-                .map(doc => {
-                    const data = doc.data() as any
-                    return data.groupName || data.classId || data.group || ''
-                })
-                .map(value => String(value).trim())
-                .filter(Boolean)
-        )].sort((a, b) => a.localeCompare(b))
+    const loadGroups = useCallback(async (uid?: string) => {
+        let groups: string[] = []
+        if (uid) {
+            const { getUserProfile } = await import('@/lib/auth')
+            const { getStudentsByClassIds } = await import('@/lib/groupService')
+            const profile = await getUserProfile(uid)
+            const classIds: string[] = (profile as any)?.classIds ?? []
+            const students = classIds.length > 0 ? await getStudentsByClassIds(classIds) : []
+            groups = [...new Set(
+                students
+                    .map(s => s.groupName || '')
+                    .map(v => String(v).trim())
+                    .filter(Boolean)
+            )].sort((a, b) => a.localeCompare(b))
+        }
         setAvailableGroups(groups)
     }, [])
 
@@ -208,7 +218,7 @@ export default function TeacherAssistantPage() {
         if (!ready) return
         ;(async () => {
             try {
-                await Promise.all([loadSchedulerData(), loadTopics(), loadGroups()])
+                await Promise.all([loadSchedulerData(teacherId), loadTopics(teacherId), loadGroups(teacherId)])
             } catch (error: any) {
                 showToast(error.message || 'Failed to load scheduler', true)
             } finally {
@@ -298,6 +308,7 @@ export default function TeacherAssistantPage() {
                 recurringTime: scheduleType === 'once' ? null : recurringTime,
                 config,
                 createdBy: teacherId,
+                teacherId,
                 scheduleTimezone,
                 status: 'scheduled',
                 createdAt: new Date(),
@@ -305,7 +316,7 @@ export default function TeacherAssistantPage() {
                 lastResult: null,
             })
 
-            await loadSchedulerData()
+            await loadSchedulerData(teacherId)
             showToast('Task scheduled successfully')
         } catch (error: any) {
             showToast(error.message || 'Failed to schedule task', true)

@@ -82,7 +82,17 @@ const navGroups = [
         ),
         links: [
             {
-                href: '/teacher/speaking', label: 'Speaking Practice', permKey: 'canManageSpeaking', icon: (
+                href: '/teacher/speaking/topics', label: 'Topics', permKey: 'canManageSpeaking', icon: (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
+                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2" strokeLinecap="round" strokeLinejoin="round" />
+                        <line x1="16" y1="2" x2="16" y2="6" strokeLinecap="round" />
+                        <line x1="8" y1="2" x2="8" y2="6" strokeLinecap="round" />
+                        <line x1="3" y1="10" x2="21" y2="10" strokeLinecap="round" />
+                    </svg>
+                )
+            },
+            {
+                href: '/teacher/speaking', label: 'Speaking Setup', permKey: 'canManageSpeaking', icon: (
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
                         <path d="M12 14a3 3 0 003-3V7a3 3 0 10-6 0v4a3 3 0 003 3z" strokeLinecap="round" strokeLinejoin="round" />
                         <path d="M19 11a7 7 0 01-14 0M12 18v3M8 21h8" strokeLinecap="round" strokeLinejoin="round" />
@@ -98,6 +108,7 @@ const navGroups = [
                     </svg>
                 )
             },
+            
         ]
     },
     {
@@ -164,6 +175,15 @@ const standaloneLinks = [
         )
     },
     {
+        href: '/teacher/studentList',
+        label: 'Students',
+        icon: (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
+                <path d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+        )
+    },
+    {
         href: '/teacher/messages',
         label: 'Messages',
         icon: (
@@ -176,7 +196,7 @@ const standaloneLinks = [
 
 // Class Management section — standalone for now, expandable later
 const classManagementLinks = [
-    {
+        {
         href: '/teacher/class-management',
         label: 'Group Access',
         icon: (

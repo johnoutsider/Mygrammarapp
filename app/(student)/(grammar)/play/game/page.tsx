@@ -124,7 +124,7 @@ export default function PlayGame() {
         const currentQ = quizQuestions[game.currentQuestion]
         const timeLimitMs = (currentQ?.timeLimit || 20) * 1000
         const timeMs = Date.now() - (game.questionStartedAt || Date.now())
-        const isCorrect = currentQ?.answers?.find((a: any) => a.id === answerId)?.isCorrect || false
+        const isCorrect = (currentQ?.answers || currentQ?.options || []).find((a: any) => a.id === answerId)?.isCorrect || false
 
         setAnswered(true)
         setSelectedAnswerId(answerId)

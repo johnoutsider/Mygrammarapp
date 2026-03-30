@@ -3,7 +3,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import TeacherLayout from '@/components/TeacherLayout'
-import { listAllSpeakingResponses, TeacherSpeakingResponse } from '@/lib/speakingService'
+import { listSpeakingResponsesByStudentIds, TeacherSpeakingResponse } from '@/lib/speakingService'
+import { auth } from '@/lib/firebase'
+import { getUserProfile } from '@/lib/auth'
 
 const SESSION_WINDOW_MS = 30 * 60 * 1000
 
@@ -67,8 +69,17 @@ export default function TeacherStudentSessionsPage() {
     useEffect(() => {
         const load = async () => {
             try {
-                const all = await listAllSpeakingResponses()
-                setResponses(all.filter(r => r.studentId === params.studentId))
+                if (!auth.currentUser) return
+                const profile = await getUserProfile(auth.currentUser.uid)
+                const teacherClassIds: string[] = (profile as any)?.classIds ?? []
+                const { verifyStudentOwnership } = await import('@/lib/accessControl')
+                if (teacherClassIds.length > 0 && !(await verifyStudentOwnership(teacherClassIds, params.studentId))) {
+                    setError('Student not in your classes.')
+                    setLoading(false)
+                    return
+                }
+                const data = await listSpeakingResponsesByStudentIds([params.studentId], { onlySent: true })
+                setResponses(data)
             } catch (err) {
                 console.error(err)
                 setError('Failed to load student sessions.')

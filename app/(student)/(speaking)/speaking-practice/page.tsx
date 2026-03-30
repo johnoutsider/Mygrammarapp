@@ -35,9 +35,22 @@ function SpeakingPracticeContent() {
     useEffect(() => {
         const loadAssignment = async () => {
             try {
+                // Resolve the student's teacher for per-teacher speaking assignments
+                const { getUserProfile } = await import('@/lib/auth')
+                const { getStudentTeacherId } = await import('@/lib/classService')
+                const { auth: firebaseAuth } = await import('@/lib/firebase')
+                const user = firebaseAuth.currentUser
+                let teacherId: string | undefined
+                if (user) {
+                    const profile = await getUserProfile(user.uid)
+                    if (profile?.classId) {
+                        const tid = await getStudentTeacherId(profile.classId)
+                        if (tid) teacherId = tid
+                    }
+                }
                 const nextAssignment = assignmentId
-                    ? await getSpeakingAssignmentById(assignmentId)
-                    : await getActiveSpeakingAssignment()
+                    ? await getSpeakingAssignmentById(assignmentId, teacherId)
+                    : await getActiveSpeakingAssignment(teacherId)
                 setAssignment(nextAssignment)
                 setRemainingSeconds(nextAssignment?.prepSeconds ?? 0)
             } catch (loadError) {
@@ -56,6 +69,19 @@ function SpeakingPracticeContent() {
         setRemainingSeconds(assignment.prepSeconds)
     }, [assignment, currentStepIndex])
 
+    // If no devices are configured yet, redirect to device setup
+    useEffect(() => {
+        if (loading || !assignment) return
+        const hasCamera = typeof window !== 'undefined' && sessionStorage.getItem('speaking_camera_id')
+        const hasMic = typeof window !== 'undefined' && sessionStorage.getItem('speaking_mic_id')
+        if (!hasCamera || !hasMic) {
+            const dest = assignmentId
+                ? `/speaking-practice/session/${assignment.id}?assignmentId=${assignmentId}`
+                : `/speaking-practice/session/${assignment.id}`
+            router.replace(dest)
+        }
+    }, [loading, assignment, assignmentId, router])
+
     useEffect(() => {
         if (!assignment || !currentStep || remainingSeconds <= 0) return
 
@@ -63,7 +89,7 @@ function SpeakingPracticeContent() {
             setRemainingSeconds(current => {
                 if (current <= 1) {
                     clearInterval(timer)
-                    router.push(`/speaking-practice/session/${assignment.id}?step=${currentStepIndex}`)
+                    router.push(`/speaking-practice/session/${assignment.id}?step=${currentStepIndex}&skipSetup=true`)
                     return 0
                 }
                 return current - 1
@@ -108,34 +134,68 @@ function SpeakingPracticeContent() {
 
     return (
         <StudentLayout title="Speaking Practice">
-            <div className="h-full flex flex-col items-center justify-center gap-6 px-4 py-6 max-w-2xl mx-auto">
-                <SpeakingPromptBubble
-                    label={`${assignment.partLabel} - Step ${currentStepIndex + 1} of ${assignment.questionSteps.length}`}
-                    text={currentStep.text}
-                />
+            <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6">
+                <div className="bg-white rounded-3xl shadow-lg w-full max-w-[560px] overflow-hidden">
 
-                <SpeakingCountdownRing
-                    remainingSeconds={remainingSeconds}
-                    totalSeconds={assignment.prepSeconds}
-                    label="Preparation Time"
-                    sublabel="Each linked question is given step by step"
-                    size={220}
-                    strokeWidth={18}
-                />
+                    {/* Step label */}
+                    <div className="px-8 pt-8 pb-4 text-center">
+                        <div className="text-[0.68rem] font-bold uppercase tracking-[0.1em] text-slate-400">
+                            {assignment.partLabel} &mdash; Step {currentStepIndex + 1} of {assignment.questionSteps.length}
+                        </div>
+                    </div>
 
-                <div className="flex gap-3">
-                    <button
-                        onClick={() => router.push(`/speaking-practice/session/${assignment.id}?step=${currentStepIndex}`)}
-                        className="px-6 py-2.5 rounded-xl bg-[#4c75c3] hover:bg-[#3f64ab] text-white font-semibold text-sm"
-                    >
-                        Start This Step
-                    </button>
-                    <button
-                        onClick={() => router.push('/speaking-log')}
-                        className="px-6 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-sm"
-                    >
-                        Open My Speaking Log
-                    </button>
+                    {/* Cue card (if mainQuestion exists) or speech bubble (legacy) */}
+                    {assignment.mainQuestion ? (
+                        <div className="mx-6 rounded-xl border p-5 space-y-3" style={{ background: '#EEF3FA', borderColor: '#C8D8E8' }}>
+                            <p className="text-slate-800 text-sm font-medium leading-relaxed">{assignment.mainQuestion}</p>
+                            {assignment.questionSteps.length > 0 && (
+                                <div className="space-y-1.5">
+                                    <p className="text-slate-700 text-sm">You should say:</p>
+                                    <ul className="space-y-1.5">
+                                        {assignment.questionSteps.map((step, i) => (
+                                            <li key={step.id ?? i} className={`flex items-start gap-2.5 ${i === currentStepIndex ? '' : 'opacity-50'}`}>
+                                                <span className={`text-xs mt-0.5 font-bold flex-shrink-0 ${i === currentStepIndex ? 'text-[#C0392B]' : 'text-[#C0392B]'}`}>▶</span>
+                                                <span className={`text-sm leading-snug ${i === currentStepIndex ? 'text-[#7B3535] font-medium' : 'text-[#7B3535]'}`}>{step.text}</span>
+                                                {i === currentStepIndex && (
+                                                    <span className="ml-1 text-[10px] font-semibold text-white bg-[#C0392B] rounded px-1.5 py-0.5 flex-shrink-0">NOW</span>
+                                                )}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+                            {assignment.closingLine && (
+                                <p className="text-slate-700 text-sm">{assignment.closingLine}</p>
+                            )}
+                        </div>
+                    ) : (
+                        <div className="px-6">
+                            <SpeakingPromptBubble text={currentStep.text} />
+                        </div>
+                    )}
+
+                    {/* Circular countdown */}
+                    <div className="flex flex-col items-center gap-1 px-8 py-6">
+                        <SpeakingCountdownRing
+                            remainingSeconds={remainingSeconds}
+                            totalSeconds={assignment.prepSeconds}
+                            label="Preparation Time"
+                            sublabel="Use this time to think about your answer"
+                            size={160}
+                            strokeWidth={10}
+                        />
+                    </div>
+
+                    {/* Start button */}
+                    <div className="px-8 pb-8">
+                        <button
+                            onClick={() => router.push(`/speaking-practice/session/${assignment.id}?step=${currentStepIndex}&skipSetup=true`)}
+                            className="w-full py-4 rounded-xl bg-[#5b7ec9] hover:bg-[#4a6db8] text-white font-semibold text-sm transition-colors"
+                        >
+                            Start This Step
+                        </button>
+                    </div>
+
                 </div>
             </div>
         </StudentLayout>

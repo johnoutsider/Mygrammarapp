@@ -80,7 +80,7 @@ export default function TeacherSpeakingLogsPage() {
                 const classIds: string[] = (teacherProfile as any)?.classIds || []
                 const students = classIds.length > 0 ? await getStudentsByClassIds(classIds) : []
                 const studentIds = students.map(s => s.uid)
-                const data = await listSpeakingResponsesByStudentIds(studentIds)
+                const data = await listSpeakingResponsesByStudentIds(studentIds, { onlySent: true })
                 setResponses(data)
             } catch (err) {
                 console.error(err)

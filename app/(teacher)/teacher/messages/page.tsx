@@ -10,6 +10,7 @@ import {
     query, orderBy, onSnapshot, where
 } from 'firebase/firestore'
 import TeacherLayout from '@/components/TeacherLayout'
+import { getStudentsByClassIds } from '@/lib/groupService'
 import Alert from '@/components/Alert'
 
 interface Message {
@@ -80,20 +81,18 @@ export default function TeacherMessages() {
                 if (profile?.role !== 'teacher') { router.push('/dashboard'); return }
 
                 try {
-                    const snap = await getDocs(query(collection(db, 'users'), where('role', '==', 'student')))
-                    setStudents(snap.docs.map(d => {
-                        const data = d.data() as any
-                        return {
-                            uid: d.id,
-                            displayName: data.displayName || data.name || 'Student',
-                            groupName: data.groupName || '',
-                            email: data.email || '',
-                            telegramChatId: data.telegramChatId || '',
-                        }
-                    }).sort((a, b) => (a.groupName || '').localeCompare(b.groupName || '') || a.displayName.localeCompare(b.displayName)))
+                    const classIds: string[] = (profile as any)?.classIds ?? []
+                    const myStudents = classIds.length > 0 ? await getStudentsByClassIds(classIds) : []
+                    setStudents(myStudents.map(s => ({
+                        uid: s.uid,
+                        displayName: s.displayName || s.name || 'Student',
+                        groupName: s.groupName || '',
+                        email: (s as any).email || '',
+                        telegramChatId: (s as any).telegramChatId || '',
+                    })).sort((a, b) => (a.groupName || '').localeCompare(b.groupName || '') || a.displayName.localeCompare(b.displayName)))
                 } catch (e) { console.error('Could not load students:', e) }
 
-                const q = query(collection(db, 'messages'), orderBy('createdAt', 'desc'))
+                const q = query(collection(db, 'messages'), where('senderId', '==', user.uid), orderBy('createdAt', 'desc'))
                 msgUnsub = onSnapshot(q,
                     snap => {
                         setMessages(snap.docs.map(d => ({ id: d.id, ...d.data() })) as Message[])

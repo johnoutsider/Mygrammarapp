@@ -25,7 +25,7 @@ export default function StudentRevealing({
     myTeam: (GameTeam & { id: string }) | null
 }) {
     const isTF = currentQ?.type === 'true_or_false'
-    const answers = currentQ?.answers || []
+    const answers = currentQ?.answers || currentQ?.options || []
     const styles = isTF ? TF_SHAPES : SHAPES
 
     const wasCorrect = pointsEarned !== null && pointsEarned > 0

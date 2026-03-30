@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { auth, db } from '@/lib/firebase'
 import { onAuthStateChanged } from 'firebase/auth'
-import { collection, getDocs, query, orderBy } from 'firebase/firestore'
+import { collection, getDocs, query, orderBy, where } from 'firebase/firestore'
 import TeacherLayout from '@/components/TeacherLayout'
 
 interface ReportSummary {
@@ -29,7 +29,7 @@ export default function ReportsPage() {
             if (profile?.role !== 'teacher') { router.push('/dashboard'); return }
 
             const snap = await getDocs(
-                query(collection(db, 'gameReports'), orderBy('playedAt', 'desc'))
+                query(collection(db, 'gameReports'), where('hostId', '==', user.uid), orderBy('playedAt', 'desc'))
             )
 
             const data: ReportSummary[] = snap.docs.map(d => {

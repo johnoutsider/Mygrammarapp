@@ -28,8 +28,14 @@ export default function StudentDetails() {
             const myProfile = await getUserProfile(auth.currentUser.uid)
             if (myProfile?.role !== 'teacher') { router.push('/dashboard'); return }
 
+            const teacherClassIds: string[] = (myProfile as any)?.classIds ?? []
             const studentDoc = await getDoc(doc(db, 'users', studentId))
-            if (studentDoc.exists()) setStudent({ uid: studentDoc.id, ...studentDoc.data() })
+            if (!studentDoc.exists()) { router.push('/teacher'); return }
+            const studentData = { uid: studentDoc.id, ...studentDoc.data() } as any
+            if (teacherClassIds.length > 0 && !teacherClassIds.includes(studentData.classId)) {
+                router.push('/teacher'); return
+            }
+            setStudent(studentData)
 
             const essaysSnap = await getDocs(query(collection(db, 'essays'), where('studentId', '==', studentId)))
             const essayList = essaysSnap.docs.map(d => ({ id: d.id, ...d.data() })) as any[]

@@ -163,5 +163,27 @@ service cloud.firestore {
       allow read: if request.auth != null;
       allow create, update, delete: if request.auth != null && isApprovedTeacher(request.auth.uid);
     }
+
+    // ─── Quizzes ─────────────────────────────────────────────────────────
+    match /quizzes/{quizId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update, delete: if request.auth != null && (
+        resource.data.createdBy == request.auth.uid ||
+        isApprovedTeacher(request.auth.uid)
+      );
+    }
+
+    // ─── Game reports ─────────────────────────────────────────────────────
+    match /gameReports/{reportId} {
+      // Host teacher can read their own reports; admins can read all
+      allow read: if request.auth != null && (
+        resource.data.hostId == request.auth.uid ||
+        isAdmin(request.auth.uid)
+      );
+      // Only the game system (approved teachers) can write reports
+      allow create: if request.auth != null && isApprovedTeacher(request.auth.uid);
+      allow update, delete: if false;
+    }
   }
 }

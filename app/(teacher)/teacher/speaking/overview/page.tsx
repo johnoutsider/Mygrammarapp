@@ -3,7 +3,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import TeacherLayout from '@/components/TeacherLayout'
-import { listAllStudentSpeakingOverview, StudentSpeakingOverview } from '@/lib/speakingService'
+import { listSpeakingResponsesByStudentIds, buildSpeakingOverviewFromResponses, StudentSpeakingOverview } from '@/lib/speakingService'
+import { auth } from '@/lib/firebase'
+import { getUserProfile } from '@/lib/auth'
+import { getStudentsByClassIds } from '@/lib/groupService'
 
 function formatDate(value: string) {
     if (!value) return '—'
@@ -44,7 +47,13 @@ export default function TeacherSpeakingOverviewPage() {
     useEffect(() => {
         const load = async () => {
             try {
-                const data = await listAllStudentSpeakingOverview()
+                if (!auth.currentUser) return
+                const profile = await getUserProfile(auth.currentUser.uid)
+                const classIds: string[] = (profile as any)?.classIds ?? []
+                const students = classIds.length > 0 ? await getStudentsByClassIds(classIds) : []
+                const studentIds = students.map(s => s.uid)
+                const responses = studentIds.length > 0 ? await listSpeakingResponsesByStudentIds(studentIds) : []
+                const data = buildSpeakingOverviewFromResponses(responses)
                 setOverviews(data)
             } catch (err) {
                 console.error(err)

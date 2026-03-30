@@ -209,7 +209,7 @@ export async function updateUserRole(
         const updates: Partial<UserProfile> = { role }
 
         if (role === 'teacher') {
-            updates.classIds = ['default-class']
+            updates.classIds = []
             updates.status = 'approved'
             updates.permissions = DEFAULT_TEACHER_PERMISSIONS
             if (approvedBy) {
@@ -246,7 +246,7 @@ export async function addClassToTeacher(teacherId: string, classId: string): Pro
 export async function getTeacherClassIds(teacherId: string): Promise<string[]> {
     const profile = await getUserProfile(teacherId)
     if (!profile || profile.role !== 'teacher') return []
-    return profile.classIds || ['default-class']
+    return profile.classIds || []
 }
 
 // ─────────────────────────────────────────────

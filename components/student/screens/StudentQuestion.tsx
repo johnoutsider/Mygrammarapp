@@ -20,7 +20,7 @@ export default function StudentQuestion({
 }) {
     const timerPct = (timeLeft / timeLimitSec) * 100
     const isTF = currentQ?.type === 'true_or_false'
-    const answers = currentQ?.answers || []
+    const answers = currentQ?.answers || currentQ?.options || []
     const colors = isTF ? TF_COLORS : ANSWER_COLORS
     const shapes = isTF ? TF_SHAPES : ANSWER_SHAPES
     const myScore = myTeam

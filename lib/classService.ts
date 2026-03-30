@@ -260,6 +260,14 @@ export async function getStudentsByClass(classId: string) {
     return snap.docs.map(d => ({ uid: d.id, ...d.data() }))
 }
 
+/** Resolve the primary teacher for a student's class */
+export async function getStudentTeacherId(classId: string): Promise<string | null> {
+    if (!classId || classId === 'default-class') return null
+    const cls = await getClass(classId)
+    if (!cls || cls.teacherIds.length === 0) return null
+    return cls.teacherIds[0]
+}
+
 /** Get students in default-class (unassigned pool) */
 export async function getUnassignedStudents() {
     const q = query(

@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { auth, db } from '@/lib/firebase'
-import { collection, addDoc, serverTimestamp, getDocs, query, orderBy, Timestamp, doc, getDoc } from 'firebase/firestore'
+import { collection, addDoc, serverTimestamp, getDocs, query, orderBy, where, Timestamp, doc, getDoc } from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
 import { assignPeerReviewers } from '@/lib/peer-assignment'
 import StudentLayout from '@/components/StudentLayout'
@@ -47,7 +47,17 @@ export default function SubmitEssay() {
     useEffect(() => {
         const fetchTopics = async () => {
             try {
-                const q = query(collection(db, 'topics'), orderBy('createdAt', 'desc'))
+                // Resolve the student's teacher to show only their topics
+                const { getStudentTeacherId } = await import('@/lib/classService')
+                const user = auth.currentUser
+                let teacherId: string | null = null
+                if (user) {
+                    const profile = await getUserProfile(user.uid)
+                    if (profile?.classId) teacherId = await getStudentTeacherId(profile.classId)
+                }
+                const q = teacherId
+                    ? query(collection(db, 'topics'), where('teacherId', '==', teacherId), orderBy('createdAt', 'desc'))
+                    : query(collection(db, 'topics'), orderBy('createdAt', 'desc'))
                 const snapshot = await getDocs(q)
                 const data = snapshot.docs.map(d => ({
                     id: d.id,

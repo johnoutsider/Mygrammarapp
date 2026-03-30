@@ -1,10 +1,21 @@
 'use client'
 
-import { Users, Zap, Play } from 'lucide-react'
+import { Maximize, Volume2, User, Users, Zap } from 'lucide-react'
 import { motion } from 'motion/react'
 import type { ActiveGame, GamePlayer } from '@/lib/gameService'
 
-const CARD_GRADIENTS = [
+const AVATAR_COLORS = [
+    'bg-orange-400',
+    'bg-blue-500',
+    'bg-green-500',
+    'bg-red-400',
+    'bg-purple-500',
+    'bg-teal-500',
+    'bg-pink-400',
+    'bg-indigo-500',
+]
+
+const TEAM_COLORS = [
     'from-orange-400 to-orange-500',
     'from-blue-400 to-blue-600',
     'from-green-400 to-green-500',
@@ -18,7 +29,7 @@ const CARD_GRADIENTS = [
 export default function GameLobby({
     game,
     players,
-    onStart
+    onStart,
 }: {
     game: ActiveGame
     players: [string, GamePlayer][]
@@ -37,165 +48,158 @@ export default function GameLobby({
         (sum, t: any) => sum + Object.keys(t.members || {}).length, 0
     )
 
+    const displayCount = isTeamMode ? sortedTeams.length : playerCount
+    const canStart = isTeamMode ? sortedTeams.length > 0 : playerCount > 0
+    const startLabel = isTeamMode
+        ? (sortedTeams.length > 0 ? `Start Game · ${sortedTeams.length} team${sortedTeams.length !== 1 ? 's' : ''}` : 'Assign teams first...')
+        : (playerCount > 0 ? `Start Game · ${playerCount} player${playerCount !== 1 ? 's' : ''}` : 'Waiting for players...')
+
     return (
-        <div className="min-h-screen bg-gradient-to-br from-violet-700 via-purple-800 to-indigo-900 flex flex-col items-center justify-center p-8 relative overflow-hidden">
+        <div className="flex flex-col h-screen font-sans bg-[#00D2D3] overflow-hidden select-none">
 
-            {/* Background blobs */}
-            <div className="absolute top-0 left-0 w-96 h-96 bg-purple-500/20 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2" />
-            <div className="absolute bottom-0 right-0 w-96 h-96 bg-indigo-500/20 rounded-full blur-3xl translate-x-1/2 translate-y-1/2" />
+            {/* ── TOP BAR ──────────────────────────────────────────────────── */}
+            <div className="bg-[#9c45c1] text-white flex items-stretch px-6 py-4 h-[120px] border-b-[8px] border-[#8130a1] shrink-0">
 
-            {/* Header */}
-            <div className="relative z-10 text-center mb-8">
-                <div className="inline-flex items-center gap-2 bg-white/10 border border-white/20 text-white px-5 py-2 rounded-full font-bold text-base mb-4 backdrop-blur-sm">
-                    <Users size={18} />
-                    Waiting Room
+                {/* Center: player count + title + questions badge */}
+                <div className="flex-1 flex items-center relative h-full pr-[50px]">
+
+                    {/* Left: Player / Team count */}
+                    <div
+                        className="flex items-center gap-3 text-white font-black text-6xl pl-4"
+                        style={{ textShadow: '2px 3px 0px rgba(0,0,0,0.15)' }}
+                    >
+                        <span>{displayCount}</span>
+                        {isTeamMode
+                            ? <Users className="w-12 h-12 fill-current" strokeWidth={3} />
+                            : <User className="w-12 h-12 fill-current" strokeWidth={3} />
+                        }
+                    </div>
+
+                    {/* Center: Quiz title */}
+                    <div
+                        className="absolute left-1/2 -translate-x-1/2 text-white font-black text-[80px] tracking-wide whitespace-nowrap"
+                        style={{
+                            textShadow: '0 5px 0 rgba(0,0,0,0.15)',
+                            WebkitTextStroke: '2px rgba(255,255,255,0.3)',
+                            lineHeight: 1,
+                        }}
+                    >
+                        {game.quizTitle}
+                    </div>
+
+                    {/* Questions badge */}
+                    <div className="absolute right-6 -bottom-[28px] bg-white/20 text-white py-1.5 rounded-full text-[13px] font-bold tracking-[0.15em] uppercase backdrop-blur-md border-[1.5px] border-white/30 z-30 shadow-[0_4px_12px_rgba(0,0,0,0.1)] px-[24px] py-[10px] ml-[200px] mr-[0px] mt-[50px] mb-[40px]">
+                        {game.totalQuestions} QUESTIONS
+                    </div>
                 </div>
-                <h1 className="text-4xl font-black text-white mb-2">{game.quizTitle}</h1>
-                <p className="text-violet-300 text-base">{game.totalQuestions} questions</p>
+
+                {/* Right: Start button + icons */}
+                <div className="flex items-center gap-8 ml-auto mr-4">
+                    <button
+                        onClick={onStart}
+                        disabled={!canStart}
+                        className={`bg-white text-[#333333] py-2 rounded-[10px] font-black text-[24px] shadow-[0_4px_0_0_#cbd5e1] active:shadow-none active:translate-y-[4px] hover:bg-gray-50 transition-all tracking-wide px-8
+                            ${canStart ? 'hover:bg-gray-50' : 'opacity-40 cursor-not-allowed'}`}
+                    >
+                        Start
+                    </button>
+                    <div className="flex gap-4 text-white/90">
+                        <Maximize className="w-6 h-6 cursor-pointer hover:opacity-80 transition-opacity" strokeWidth={2.5} />
+                        <Volume2 className="w-6 h-6 cursor-pointer hover:opacity-80 transition-opacity" strokeWidth={2.5} />
+                    </div>
+                </div>
             </div>
 
-            {/* ── TEAM MODE ──────────────────────────────────────────────────── */}
-            {isTeamMode ? (
-                <div className="relative z-10 w-full max-w-4xl">
+            {/* ── MAIN AREA ────────────────────────────────────────────────── */}
+            <div className="flex-1 relative overflow-hidden flex flex-col pt-8">
 
-                    {/* Team count pill */}
-                    <div className="flex justify-center mb-6">
-                        <div className="bg-white/10 border border-white/20 rounded-2xl px-6 py-3 text-center">
-                            <p className="text-white/60 text-xs font-bold uppercase tracking-wider mb-1">
-                                Teams Ready
-                            </p>
-                            <p className="text-4xl font-black text-white">{sortedTeams.length}</p>
-                            <p className="text-white/50 text-sm mt-1">
-                                {totalTeamPlayers} player{totalTeamPlayers !== 1 ? 's' : ''} assigned
-                            </p>
-                        </div>
-                    </div>
+                {/* Background pattern */}
+                <div
+                    className="absolute inset-0 opacity-[0.15] pointer-events-none"
+                    style={{
+                        backgroundImage: `url("data:image/svg+xml,%3Csvg width='120' height='120' viewBox='0 0 120 120' xmlns='http://www.w3.org/2000/svg'%3E%3Crect x='20' y='20' width='80' height='80' rx='20' fill='%23ffffff' transform='rotate(15 60 60)' /%3E%3C/svg%3E")`,
+                        backgroundSize: '120px 120px',
+                    }}
+                />
 
-                    {/* Team cards grid */}
-                    {sortedTeams.length > 0 ? (
-                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-8">
-                            {sortedTeams.map((team: any, index: number) => {
-                                const memberCount = Object.keys(team.members || {}).length
-                                const memberNames = Object.values(team.members || {}) as string[]
-                                return (
-                                    <motion.div
-                                        key={team.id}
-                                        initial={{ opacity: 0, y: 20 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        transition={{ delay: index * 0.05 }}
-                                        className={`bg-gradient-to-br ${CARD_GRADIENTS[index % CARD_GRADIENTS.length]} rounded-2xl p-4 text-white shadow-lg`}
-                                    >
-                                        <div className="font-extrabold text-base mb-1 truncate">
-                                            {team.name}
-                                        </div>
-                                        <div className="text-white/70 text-xs mb-2">
-                                            {memberCount} member{memberCount !== 1 ? 's' : ''}
-                                        </div>
-                                        <div className="space-y-1">
-                                            {memberNames.slice(0, 3).map((name, i) => (
-                                                <div key={i} className="flex items-center gap-1.5">
-                                                    <div className="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center text-[10px] font-bold flex-shrink-0">
-                                                        {(name as string)[0]?.toUpperCase()}
-                                                    </div>
-                                                    <span className="text-xs truncate opacity-90">{name as string}</span>
-                                                </div>
-                                            ))}
-                                            {memberNames.length > 3 && (
-                                                <p className="text-white/50 text-[10px]">
-                                                    +{memberNames.length - 3} more
-                                                </p>
-                                            )}
-                                        </div>
-                                    </motion.div>
-                                )
-                            })}
-                        </div>
-                    ) : (
-                        <div className="text-white/40 text-center py-8 mb-6">
-                            No teams assigned yet...
-                        </div>
-                    )}
-
-                    {/* Start button */}
-                    <div className="flex justify-center">
-                        <button
-                            onClick={onStart}
-                            disabled={sortedTeams.length === 0}
-                            className={`flex items-center gap-3 text-lg font-black px-10 py-4 rounded-2xl shadow-2xl transition-all duration-200 ${sortedTeams.length > 0
-                                    ? 'bg-white text-purple-700 hover:scale-105 hover:shadow-3xl'
-                                    : 'bg-white/30 text-white/50 cursor-not-allowed'
-                                }`}
-                        >
-                            <Play size={22} className="fill-current" />
-                            {sortedTeams.length > 0
-                                ? `Start Game · ${sortedTeams.length} teams`
-                                : 'Assign teams first...'
-                            }
-                        </button>
-                    </div>
-                </div>
-
-            ) : (
-                /* ── SOLO MODE (unchanged) ────────────────────────────────────────── */
-                <div className="relative z-10 w-full max-w-4xl">
-
-                    {/* Player count pill */}
-                    <div className="flex justify-center mb-6">
-                        <div className="bg-white/10 border border-white/20 rounded-2xl px-6 py-3 text-center">
-                            <p className="text-white/60 text-xs font-bold uppercase tracking-wider mb-1">
-                                Players Joined
-                            </p>
-                            <p className="text-4xl font-black text-white">{playerCount}</p>
-                        </div>
-                    </div>
-
-                    {/* Player grid */}
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 mb-8">
+                {/* ── SOLO MODE ──────────────────────────────────────────────── */}
+                {!isTeamMode && (
+                    <div className="flex-1 w-full p-8 mt-8 relative z-10 flex flex-wrap content-start justify-center gap-6 max-w-[1600px] mx-auto overflow-y-auto">
                         {playerCount === 0 ? (
-                            <div className="col-span-full text-white/40 text-center py-8">
+                            <p className="text-white/60 text-xl font-bold mt-20">
                                 Waiting for students to join...
-                            </div>
+                            </p>
                         ) : (
                             sorted.map(([uid, p], index) => (
                                 <motion.div
                                     key={uid}
-                                    initial={{ opacity: 0, y: 20 }}
-                                    animate={{ opacity: 1, y: 0 }}
+                                    initial={{ opacity: 0, scale: 0.8 }}
+                                    animate={{ opacity: 1, scale: 1 }}
                                     transition={{ delay: index * 0.05 }}
-                                    className={`bg-gradient-to-br ${CARD_GRADIENTS[index % CARD_GRADIENTS.length]} rounded-2xl p-4 text-white text-center shadow-lg`}
+                                    className="bg-white h-[60px] w-[260px] rounded-[10px] shadow-[0_5px_0_0_#d1d5db] relative flex items-center mt-6 group cursor-pointer hover:-translate-y-1 transition-transform"
                                 >
-                                    <div className="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center text-2xl font-black mx-auto mb-2">
-                                        {p.name.charAt(0).toUpperCase()}
+                                    {/* Avatar popping out on the left */}
+                                    <div className={`absolute -left-1 bottom-0 w-[72px] h-[72px] ${AVATAR_COLORS[index % AVATAR_COLORS.length]} rounded-xl shadow-[0_3px_6px_rgba(0,0,0,0.15)] z-10 flex items-center justify-center`}>
+                                        {(p as any).photoURL ? (
+                                            <img
+                                                src={(p as any).photoURL}
+                                                alt={p.name}
+                                                className="w-full h-full object-cover rounded-xl"
+                                            />
+                                        ) : (
+                                            <span className="text-white font-black text-2xl">
+                                                {p.name.charAt(0).toUpperCase()}
+                                            </span>
+                                        )}
                                     </div>
-                                    <p className="font-bold text-sm truncate">{p.name}</p>
-                                    <p className="text-white/60 text-xs mt-1 flex items-center justify-center gap-1">
-                                        <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />
-                                        Ready
-                                    </p>
+
+                                    {/* Name */}
+                                    <div className="flex-1 pl-[76px] pr-4 text-center text-[#333333] font-semibold text-[20px] truncate">
+                                        {p.name}
+                                    </div>
                                 </motion.div>
                             ))
                         )}
                     </div>
+                )}
 
-                    {/* Start button */}
-                    <div className="flex justify-center">
-                        <button
-                            onClick={onStart}
-                            disabled={playerCount === 0}
-                            className={`flex items-center gap-3 text-lg font-black px-10 py-4 rounded-2xl shadow-2xl transition-all duration-200 ${playerCount > 0
-                                    ? 'bg-white text-purple-700 hover:scale-105 hover:shadow-3xl'
-                                    : 'bg-white/30 text-white/50 cursor-not-allowed'
-                                }`}
-                        >
-                            <Zap size={22} className="fill-current" />
-                            {playerCount > 0
-                                ? `Start Game · ${playerCount} player${playerCount !== 1 ? 's' : ''}`
-                                : 'Waiting for players...'
-                            }
-                        </button>
+                {/* ── TEAM MODE ──────────────────────────────────────────────── */}
+                {isTeamMode && (
+                    <div className="flex-1 w-full p-8 mt-8 relative z-10 flex flex-wrap content-start justify-center gap-6 max-w-[1600px] mx-auto overflow-y-auto">
+                        {sortedTeams.length === 0 ? (
+                            <p className="text-white/60 text-xl font-bold mt-20">
+                                No teams assigned yet...
+                            </p>
+                        ) : (
+                            sortedTeams.map((team: any, index: number) => {
+                                const memberNames = Object.values(team.members || {}) as string[]
+                                return (
+                                    <motion.div
+                                        key={team.id}
+                                        initial={{ opacity: 0, scale: 0.8 }}
+                                        animate={{ opacity: 1, scale: 1 }}
+                                        transition={{ delay: index * 0.05 }}
+                                        className="bg-white w-[260px] rounded-[10px] shadow-[0_5px_0_0_#d1d5db] relative flex flex-col mt-6 p-4 pl-[80px] cursor-pointer hover:-translate-y-1 transition-transform group"
+                                    >
+                                        {/* Team color badge popping out left */}
+                                        <div className={`absolute -left-1 top-1/2 -translate-y-1/2 w-[72px] h-[72px] bg-gradient-to-br ${TEAM_COLORS[index % TEAM_COLORS.length]} rounded-xl shadow-[0_3px_6px_rgba(0,0,0,0.15)] z-10 flex items-center justify-center`}>
+                                            <Users className="w-8 h-8 text-white" strokeWidth={2.5} />
+                                        </div>
+
+                                        {/* Team name */}
+                                        <div className="text-[#333333] font-black text-[18px] truncate">{team.name}</div>
+                                        {/* Members */}
+                                        <div className="text-gray-400 text-xs mt-1">
+                                            {memberNames.slice(0, 3).join(', ')}
+                                            {memberNames.length > 3 && ` +${memberNames.length - 3} more`}
+                                        </div>
+                                    </motion.div>
+                                )
+                            })
+                        )}
                     </div>
-                </div>
-            )}
+                )}
+            </div>
         </div>
     )
 }

@@ -32,8 +32,15 @@ export default function EditEssay() {
             if (!auth.currentUser) { router.push('/'); return }
 
             try {
-                // Load topics
-                const topicsSnap = await getDocs(query(collection(db, 'topics'), orderBy('createdAt', 'desc')))
+                // Load topics scoped to student's teacher
+                const { getUserProfile } = await import('@/lib/auth')
+                const { getStudentTeacherId } = await import('@/lib/classService')
+                const profile = await getUserProfile(auth.currentUser.uid)
+                const teacherId = profile?.classId ? await getStudentTeacherId(profile.classId) : null
+                const topicsQuery = teacherId
+                    ? query(collection(db, 'topics'), where('teacherId', '==', teacherId), orderBy('createdAt', 'desc'))
+                    : query(collection(db, 'topics'), orderBy('createdAt', 'desc'))
+                const topicsSnap = await getDocs(topicsQuery)
                 setTopics(topicsSnap.docs.map(d => ({ id: d.id, name: (d.data() as any).name })))
 
                 const essayDoc = await getDoc(doc(db, 'essays', essayId))

@@ -7,6 +7,7 @@ import { auth, db } from '@/lib/firebase'
 import { collection, getDocs, query, where, limit, orderBy } from 'firebase/firestore'
 import TeacherLayout from '@/components/TeacherLayout'
 import { isNewRubric, getScore100 } from '@/lib/score-calculator'
+import { getStudentsByClassIds } from '@/lib/groupService'
 
 interface ReviewRow {
     reviewId: string
@@ -59,20 +60,33 @@ export default function TeacherReviewActivity() {
                 const myProfile = await getUserProfile(auth.currentUser.uid)
                 if (myProfile?.role !== 'teacher') { router.push('/dashboard'); return }
 
-                const [usersSnap, essaysSnap, reviewsSnap] = await Promise.all([
-                    getDocs(query(collection(db, 'users'), where('role', '==', 'student'))),
+                const classIds: string[] = (myProfile as any)?.classIds ?? []
+                const myStudents = classIds.length > 0 ? await getStudentsByClassIds(classIds) : []
+                const myStudentIds = new Set(myStudents.map(s => s.uid))
+
+                const usersMap = new Map(myStudents.map(s => [s.uid, s as any]))
+
+                const [essaysSnap, reviewsSnap] = await Promise.all([
                     getDocs(collection(db, 'essays')),
                     getDocs(query(collection(db, 'reviews'), orderBy('completedAt', 'desc'), limit(500))),
                 ])
 
-                const usersMap = new Map(usersSnap.docs.map(d => [d.id, d.data() as any]))
-                const essaysMap = new Map(essaysSnap.docs.map(d => [d.id, { id: d.id, ...d.data() as any }]))
+                // Only keep essays belonging to the teacher's students
+                const essaysMap = new Map(
+                    essaysSnap.docs
+                        .filter(d => myStudentIds.has((d.data() as any).studentId))
+                        .map(d => [d.id, { id: d.id, ...d.data() as any }])
+                )
 
-                // Deduplicate reviews by (reviewerId + essayId)
+                // Deduplicate reviews by (reviewerId + essayId); only keep reviews for teacher's students
                 const uniqueReviewsMap = new Map()
                 reviewsSnap.docs.forEach(d => {
                     const r = d.data() as any
                     if (r.reviewerRole === 'ai') return
+                    // Only include if the reviewer or the essay author is one of this teacher's students
+                    const essay = essaysMap.get(r.essayId) as any
+                    const essayAuthorId = essay?.studentId
+                    if (!myStudentIds.has(r.reviewerId) && !myStudentIds.has(essayAuthorId)) return
 
                     const dedupeKey = `${r.reviewerId}_${r.essayId}`
                     const reviewDate = r.completedAt || r.submittedAt

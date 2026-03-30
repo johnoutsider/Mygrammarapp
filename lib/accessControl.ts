@@ -1,3 +1,5 @@
+import { doc, getDoc } from 'firebase/firestore'
+import { db } from '@/lib/firebase'
 import type { AccessMode } from '@/lib/groupService'
 
 // ─────────────────────────────────────────────
@@ -100,6 +102,18 @@ export function accessModeLabel(accessMode: AccessMode): string {
         speaking: 'Speaking Only',
     }
     return labels[accessMode]
+}
+
+/** Verify that a student belongs to one of the teacher's classes */
+export async function verifyStudentOwnership(
+    teacherClassIds: string[],
+    studentId: string
+): Promise<boolean> {
+    if (teacherClassIds.length === 0) return false
+    const studentDoc = await getDoc(doc(db, 'users', studentId))
+    if (!studentDoc.exists()) return false
+    const classId = studentDoc.data()?.classId
+    return typeof classId === 'string' && teacherClassIds.includes(classId)
 }
 
 /** Tailwind badge colour classes for an accessMode */

@@ -46,10 +46,11 @@ export default function TeacherDashboard() {
     // Map of topicId -> topicName for quick lookup
     const topicMap = Object.fromEntries(topics.map(t => [t.id, t.name]))
 
-    // Live topic listener — updates instantly when teacher adds/removes topics
+    // Live topic listener — scoped to this teacher's topics
     useEffect(() => {
+        if (!auth.currentUser) return
         const unsub = onSnapshot(
-            query(collection(db, 'topics'), orderBy('createdAt', 'desc')),
+            query(collection(db, 'topics'), where('teacherId', '==', auth.currentUser.uid), orderBy('createdAt', 'desc')),
             snap => setTopics(snap.docs.map(d => ({ id: d.id, name: (d.data() as any).name as string })))
         )
         return () => unsub()

@@ -1,6 +1,11 @@
 import { initializeApp, getApps } from 'firebase/app'
 import { getAuth } from 'firebase/auth'
-import { getFirestore, enableIndexedDbPersistence } from 'firebase/firestore'
+import {
+    getFirestore,
+    initializeFirestore,
+    persistentLocalCache,
+    persistentMultipleTabManager,
+} from 'firebase/firestore'
 import { getDatabase } from 'firebase/database'
 import { getStorage } from 'firebase/storage'
 
@@ -12,7 +17,7 @@ const firebaseConfig = {
     storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || 'demo.appspot.com',
     messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || '123456789',
     appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || '1:123:web:abc',
-    databaseURL: process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL,   // ← ADD this line
+    databaseURL: process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL,
 }
 
 // Check if Firebase is properly configured
@@ -24,17 +29,16 @@ export const isFirebaseConfigured = () => {
 // Initialize Firebase
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0]
 const auth = getAuth(app)
-const db = getFirestore(app)
 
-if (typeof window !== 'undefined') {
-    enableIndexedDbPersistence(db).catch((err) => {
-        if (err.code == 'failed-precondition') {
-            console.warn('Multiple tabs open, persistence can only be enabled in one tab at a time.');
-        } else if (err.code == 'unimplemented') {
-            console.warn('The current browser does not support all of the features required to enable persistence');
-        }
-    });
-}
+// Use the modern persistent cache API (replaces deprecated enableIndexedDbPersistence).
+// persistentMultipleTabManager allows multiple tabs without "failed-precondition" errors.
+const db = typeof window !== 'undefined'
+    ? initializeFirestore(app, {
+        localCache: persistentLocalCache({
+            tabManager: persistentMultipleTabManager(),
+        }),
+    })
+    : getFirestore(app)
 
 export const rtdb = getDatabase(app)   // ← ADD this line
 export const storage = getStorage(app)

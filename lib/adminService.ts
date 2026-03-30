@@ -111,7 +111,7 @@ export async function approveTeacher(
         approvedBy: adminId,
         approvedAt: serverTimestamp(),
         permissions: DEFAULT_TEACHER_PERMISSIONS,
-        classIds: teacher?.classIds?.length ? teacher.classIds : ['default-class'],
+        classIds: teacher?.classIds?.length ? teacher.classIds : [],
     })
     await logAdminAction({
         action: 'teacher_approved',

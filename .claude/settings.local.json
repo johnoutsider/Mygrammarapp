@@ -6,7 +6,19 @@
       "mcp__Kapture_Browser_Automation__list_tabs",
       "mcp__Kapture_Browser_Automation__new_tab",
       "Bash(find \"D:\\\\Coding\\\\Antigravity folder\\\\Mygrammarapp\\\\.claude\\\\worktrees\\\\exciting-solomon\\\\app\\\\\\(teacher\\)\\\\teacher\\\\speaking\" -type f -o -type d)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(find \"D:\\\\Coding\\\\Antigravity folder\\\\Mygrammarapp\\\\app\\\\\\(admin\\)\" -type f)",
+      "Bash(ls -R \"D:/Coding/Antigravity folder/Mygrammarapp/app/\\(admin\\)\")",
+      "Bash(find \"D:\\\\Coding\\\\Antigravity folder\\\\Mygrammarapp\\\\app\\\\\\(admin\\)\" -type f -name \"*.tsx\" -o -name \"*.ts\" -o -name \"*.json\")",
+      "Bash(ls:*)",
+      "Bash(xargs grep:*)",
+      "mcp__ide__getDiagnostics",
+      "Bash(find 'D:\\\\Coding\\\\Antigravity folder\\\\Mygrammarapp/app' 'D:\\\\Coding\\\\Antigravity folder\\\\Mygrammarapp/lib' 'D:\\\\Coding\\\\Antigravity folder\\\\Mygrammarapp/components' -type f \\\\\\(-name *.tsx -o -name *.ts \\\\\\))",
+      "Bash(find \"D:\\\\Coding\\\\Antigravity folder\\\\Mygrammarapp/app/\\(teacher\\)/teacher\" -name \"page.tsx\" -type f)",
+      "Bash(find \"D:\\\\Coding\\\\Antigravity folder\\\\Mygrammarapp/app/\\(admin\\)/admin\" -name \"page.tsx\" -type f)",
+      "Bash(npm run:*)",
+      "Bash(firebase deploy:*)",
+      "Bash(firebase projects:list)"
     ]
   }
 }

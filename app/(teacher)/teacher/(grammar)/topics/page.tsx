@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { auth, db } from '@/lib/firebase'
 import {
     collection, addDoc, deleteDoc, doc, onSnapshot,
-    serverTimestamp, query, orderBy, updateDoc,
+    serverTimestamp, query, orderBy, updateDoc, where,
     writeBatch, Timestamp, arrayUnion, arrayRemove,
 } from 'firebase/firestore'
 import TeacherLayout from '@/components/TeacherLayout'
@@ -55,7 +55,7 @@ export default function ManageTopics() {
 
     useEffect(() => {
         if (!auth.currentUser) { router.push('/'); return }
-        const q = query(collection(db, 'topics'), orderBy('createdAt', 'asc'))
+        const q = query(collection(db, 'topics'), where('teacherId', '==', auth.currentUser.uid), orderBy('createdAt', 'asc'))
         const unsubscribe = onSnapshot(q, (snapshot) => {
             const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as Topic[]
             const sorted = [...data].sort((a, b) => {
@@ -120,6 +120,7 @@ export default function ManageTopics() {
             await addDoc(collection(db, 'topics'), {
                 name,
                 createdBy: auth.currentUser!.uid,
+                teacherId: auth.currentUser!.uid,
                 createdAt: serverTimestamp(),
                 order: topics.length,
                 essayDeadline: null,

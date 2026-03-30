@@ -55,12 +55,15 @@ export default function StudentProgressForTeacher() {
                     return
                 }
 
-                // Fetch student details
+                // Verify student belongs to teacher's classes
+                const teacherClassIds: string[] = (myProfile as any)?.classIds ?? []
                 const studentDoc = await getDoc(doc(db, 'users', studentId))
-                if (studentDoc.exists()) {
-                    const data = studentDoc.data()
-                    setStudentName(data.displayName || data.name || 'Unknown Student')
+                if (!studentDoc.exists()) { router.push('/teacher'); return }
+                const studentData = studentDoc.data()
+                if (teacherClassIds.length > 0 && !teacherClassIds.includes(studentData.classId)) {
+                    router.push('/teacher'); return
                 }
+                setStudentName(studentData.displayName || studentData.name || 'Unknown Student')
 
                 // 1. Fetch all essays by the student
                 const essaysQuery = query(

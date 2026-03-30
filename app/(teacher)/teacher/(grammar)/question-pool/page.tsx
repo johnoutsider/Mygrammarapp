@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { auth, db } from '@/lib/firebase'
-import { collection, getDocs, doc, getDoc, updateDoc } from 'firebase/firestore'
+import { collection, getDocs, doc, getDoc, updateDoc, query, where } from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
 import TeacherLayout from '@/components/TeacherLayout'
 
@@ -64,12 +64,28 @@ export default function TeacherQuestionPoolPage() {
         const unsub = onAuthStateChanged(auth, async (user) => {
             if (!user) { router.push('/'); return }
             try {
-                const quizSnap = await getDocs(collection(db, 'quizzes'))
-                const userSnap = await getDocs(collection(db, 'users'))
+                const { getUserProfile } = await import('@/lib/auth')
+                const { getStudentsByClassIds } = await import('@/lib/groupService')
+                const profile = await getUserProfile(user.uid)
+                const classIds: string[] = (profile as any)?.classIds ?? []
+
+                // Fetch quizzes scoped to teacher's classes + teacher's own
+                const quizDocs: any[] = []
+                for (let i = 0; i < classIds.length; i += 30) {
+                    const chunk = classIds.slice(i, i + 30)
+                    const snap = await getDocs(query(collection(db, 'quizzes'), where('classId', 'in', chunk)))
+                    quizDocs.push(...snap.docs)
+                }
+                const teacherSnap = await getDocs(query(collection(db, 'quizzes'), where('createdBy', '==', user.uid)))
+                const seenIds = new Set(quizDocs.map(d => d.id))
+                teacherSnap.docs.forEach(d => { if (!seenIds.has(d.id)) quizDocs.push(d) })
+                const quizSnap = { docs: quizDocs }
+
+                // Build name map from teacher's students only
+                const myStudents = classIds.length > 0 ? await getStudentsByClassIds(classIds) : []
                 const userMap: Record<string, string> = {}
-                userSnap.docs.forEach(d => {
-                    const data = d.data() as any
-                    userMap[d.id] = data.displayName || data.name || 'Unknown Student'
+                myStudents.forEach(s => {
+                    userMap[s.uid] = s.displayName || s.name || 'Unknown Student'
                 })
                 const flattened: PoolQuestion[] = []
                 quizSnap.docs.forEach(d => {

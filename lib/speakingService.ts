@@ -25,6 +25,8 @@ export interface SpeakingAssignment {
     speakingSeconds: number
     isActive: boolean
     createdAt: string
+    mainQuestion?: string   // Opening statement shown on the cue card
+    closingLine?: string    // Optional closing line (e.g. "and explain why...")
 }
 
 export interface SpeakingLogEntry {
@@ -88,8 +90,16 @@ type UserSpeakingData = {
     speakingResponses?: SpeakingResponse[]
 }
 
-const SPEAKING_SETTINGS_DOC = doc(db, 'settings', 'speakingAssignments')
-const SPEAKING_TOPICS_DOC = doc(db, 'settings', 'speakingTopics')
+// Per-teacher doc references (fall back to global for backward compat)
+function getSpeakingSettingsDoc(teacherId: string) {
+    return doc(db, 'settings', `speakingAssignments_${teacherId}`)
+}
+function getSpeakingTopicsDoc(teacherId: string) {
+    return doc(db, 'settings', `speakingTopics_${teacherId}`)
+}
+// Legacy global docs (kept for migration reads)
+const SPEAKING_SETTINGS_DOC_GLOBAL = doc(db, 'settings', 'speakingAssignments')
+const SPEAKING_TOPICS_DOC_GLOBAL = doc(db, 'settings', 'speakingTopics')
 
 function createId(prefix: string): string {
     if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -141,6 +151,8 @@ function normalizeAssignment(raw: Partial<SpeakingAssignment>): SpeakingAssignme
         speakingSeconds: Number(raw.speakingSeconds ?? 0),
         isActive: Boolean(raw.isActive),
         createdAt: raw.createdAt || new Date(0).toISOString(),
+        mainQuestion: typeof raw.mainQuestion === 'string' ? raw.mainQuestion : undefined,
+        closingLine: typeof raw.closingLine === 'string' ? raw.closingLine : undefined,
     }
 }
 
@@ -192,8 +204,9 @@ function normalizeResponse(raw: unknown): SpeakingResponse | null {
     }
 }
 
-async function readAssignmentsDoc(): Promise<SpeakingAssignmentsDoc> {
-    const snapshot = await getDoc(SPEAKING_SETTINGS_DOC)
+async function readAssignmentsDoc(teacherId?: string): Promise<SpeakingAssignmentsDoc> {
+    const docRef = teacherId ? getSpeakingSettingsDoc(teacherId) : SPEAKING_SETTINGS_DOC_GLOBAL
+    const snapshot = await getDoc(docRef)
     if (!snapshot.exists()) {
         return { activeAssignmentId: null, assignments: [] }
     }
@@ -209,8 +222,8 @@ async function readAssignmentsDoc(): Promise<SpeakingAssignmentsDoc> {
     }
 }
 
-export async function listSpeakingAssignments(): Promise<SpeakingAssignment[]> {
-    const { assignments = [], activeAssignmentId = null } = await readAssignmentsDoc()
+export async function listSpeakingAssignments(teacherId?: string): Promise<SpeakingAssignment[]> {
+    const { assignments = [], activeAssignmentId = null } = await readAssignmentsDoc(teacherId)
 
     return assignments
         .map(assignment => ({
@@ -220,19 +233,19 @@ export async function listSpeakingAssignments(): Promise<SpeakingAssignment[]> {
         .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
 }
 
-export async function getActiveSpeakingAssignment(): Promise<SpeakingAssignment | null> {
-    const { assignments = [], activeAssignmentId = null } = await readAssignmentsDoc()
+export async function getActiveSpeakingAssignment(teacherId?: string): Promise<SpeakingAssignment | null> {
+    const { assignments = [], activeAssignmentId = null } = await readAssignmentsDoc(teacherId)
     if (!activeAssignmentId) return null
     return assignments.find(assignment => assignment.id === activeAssignmentId) ?? null
 }
 
-export async function getSpeakingAssignmentById(assignmentId: string): Promise<SpeakingAssignment | null> {
-    const { assignments = [] } = await readAssignmentsDoc()
+export async function getSpeakingAssignmentById(assignmentId: string, teacherId?: string): Promise<SpeakingAssignment | null> {
+    const { assignments = [] } = await readAssignmentsDoc(teacherId)
     return assignments.find(assignment => assignment.id === assignmentId) ?? null
 }
 
-export async function createSpeakingAssignment(input: Omit<SpeakingAssignment, 'id' | 'createdAt' | 'questionText'>): Promise<SpeakingAssignment> {
-    const existing = await readAssignmentsDoc()
+export async function createSpeakingAssignment(input: Omit<SpeakingAssignment, 'id' | 'createdAt' | 'questionText'>, teacherId?: string): Promise<SpeakingAssignment> {
+    const existing = await readAssignmentsDoc(teacherId)
     const questionSteps = input.questionSteps
         .map((step, index) => ({
             id: step.id || `step-${index + 1}`,
@@ -257,7 +270,8 @@ export async function createSpeakingAssignment(input: Omit<SpeakingAssignment, '
         isActive: item.id === assignment.id ? input.isActive : false,
     }))
 
-    await setDoc(SPEAKING_SETTINGS_DOC, {
+    const docRef = teacherId ? getSpeakingSettingsDoc(teacherId) : SPEAKING_SETTINGS_DOC_GLOBAL
+    await setDoc(docRef, {
         activeAssignmentId: input.isActive ? assignment.id : existing.activeAssignmentId ?? null,
         assignments,
     })
@@ -268,14 +282,15 @@ export async function createSpeakingAssignment(input: Omit<SpeakingAssignment, '
     }
 }
 
-export async function activateSpeakingAssignment(assignmentId: string): Promise<void> {
-    const existing = await readAssignmentsDoc()
+export async function activateSpeakingAssignment(assignmentId: string, teacherId?: string): Promise<void> {
+    const existing = await readAssignmentsDoc(teacherId)
     const assignments = (existing.assignments ?? []).map(assignment => ({
         ...assignment,
         isActive: assignment.id === assignmentId,
     }))
 
-    await setDoc(SPEAKING_SETTINGS_DOC, {
+    const docRef = teacherId ? getSpeakingSettingsDoc(teacherId) : SPEAKING_SETTINGS_DOC_GLOBAL
+    await setDoc(docRef, {
         activeAssignmentId: assignmentId,
         assignments,
     })
@@ -319,7 +334,10 @@ export async function listStudentSpeakingResponses(studentId: string): Promise<S
 }
 
 /** Fetch speaking responses scoped to a specific list of student UIDs (for teacher views) */
-export async function listSpeakingResponsesByStudentIds(studentIds: string[]): Promise<TeacherSpeakingResponse[]> {
+export async function listSpeakingResponsesByStudentIds(
+    studentIds: string[],
+    options?: { onlySent?: boolean }
+): Promise<TeacherSpeakingResponse[]> {
     if (studentIds.length === 0) return []
 
     const rows: TeacherSpeakingResponse[] = []
@@ -349,10 +367,11 @@ export async function listSpeakingResponsesByStudentIds(studentIds: string[]): P
         })
     }
 
-    return rows.sort((left, right) => (right.createdAt || '').localeCompare(left.createdAt || ''))
+    const sorted = rows.sort((left, right) => (right.createdAt || '').localeCompare(left.createdAt || ''))
+    return options?.onlySent ? sorted.filter(r => r.sentForAnalysis === true) : sorted
 }
 
-export async function listAllSpeakingResponses(): Promise<TeacherSpeakingResponse[]> {
+export async function listAllSpeakingResponses(options?: { onlySent?: boolean }): Promise<TeacherSpeakingResponse[]> {
     const usersSnapshot = await getDocs(query(collection(db, 'users'), where('role', '==', 'student')))
     const rows: TeacherSpeakingResponse[] = []
 
@@ -374,30 +393,55 @@ export async function listAllSpeakingResponses(): Promise<TeacherSpeakingRespons
             })
     })
 
-    return rows.sort((left, right) => (right.createdAt || '').localeCompare(left.createdAt || ''))
+    const sorted = rows.sort((left, right) => (right.createdAt || '').localeCompare(left.createdAt || ''))
+    return options?.onlySent ? sorted.filter(r => r.sentForAnalysis === true) : sorted
 }
 
-export async function listSpeakingTopics(): Promise<string[]> {
-    const snapshot = await getDoc(SPEAKING_TOPICS_DOC)
+export async function listSpeakingTopics(teacherId?: string): Promise<string[]> {
+    const docRef = teacherId ? getSpeakingTopicsDoc(teacherId) : SPEAKING_TOPICS_DOC_GLOBAL
+    const snapshot = await getDoc(docRef)
     if (!snapshot.exists()) return []
     const data = snapshot.data() as { topics?: unknown }
     return Array.isArray(data.topics) ? data.topics.filter((t): t is string => typeof t === 'string') : []
 }
 
-export async function addSpeakingTopic(topic: string): Promise<string[]> {
-    const existing = await listSpeakingTopics()
+export async function addSpeakingTopic(topic: string, teacherId?: string): Promise<string[]> {
+    const existing = await listSpeakingTopics(teacherId)
     const trimmed = topic.trim()
     if (!trimmed || existing.includes(trimmed)) return existing
     const updated = [...existing, trimmed]
-    await setDoc(SPEAKING_TOPICS_DOC, { topics: updated })
+    const docRef = teacherId ? getSpeakingTopicsDoc(teacherId) : SPEAKING_TOPICS_DOC_GLOBAL
+    await setDoc(docRef, { topics: updated })
     return updated
 }
 
-export async function deleteSpeakingTopic(topic: string): Promise<string[]> {
-    const existing = await listSpeakingTopics()
+export async function deleteSpeakingTopic(topic: string, teacherId?: string): Promise<string[]> {
+    const existing = await listSpeakingTopics(teacherId)
     const updated = existing.filter(t => t !== topic)
-    await setDoc(SPEAKING_TOPICS_DOC, { topics: updated })
+    const docRef = teacherId ? getSpeakingTopicsDoc(teacherId) : SPEAKING_TOPICS_DOC_GLOBAL
+    await setDoc(docRef, { topics: updated })
     return updated
+}
+
+// ── Topics with deadlines ────────────────────────────────────────────────────
+
+export interface TopicWithDeadline {
+    id: string
+    name: string
+    deadline: string // ISO datetime string, or '' if none
+}
+
+export async function listTopicsWithDeadlines(teacherId?: string): Promise<TopicWithDeadline[]> {
+    const key = teacherId ? `speakingTopicsConfig_${teacherId}` : 'speakingTopicsConfig'
+    const snapshot = await getDoc(doc(db, 'settings', key))
+    if (!snapshot.exists()) return []
+    const data = snapshot.data() as { topics?: unknown }
+    return Array.isArray(data.topics) ? (data.topics as TopicWithDeadline[]) : []
+}
+
+export async function saveTopicsWithDeadlines(topics: TopicWithDeadline[], teacherId?: string): Promise<void> {
+    const key = teacherId ? `speakingTopicsConfig_${teacherId}` : 'speakingTopicsConfig'
+    await setDoc(doc(db, 'settings', key), { topics })
 }
 
 export async function sendSessionForAnalysis(studentId: string, responseIds: string[]): Promise<void> {
@@ -546,6 +590,77 @@ export async function listAllStudentSpeakingOverview(): Promise<StudentSpeakingO
             studentEmail: entry.studentEmail,
             studentGroup: entry.studentGroup,
             totalResponses: responses.length,
+            totalSessions: sessionCount,
+            avgSpeakingSeconds: avgSpeaking,
+            totalWarnings,
+            avgBand,
+            hasAnalysis: analyzed.length > 0,
+            lastActivity,
+        })
+    }
+
+    return result.sort((a, b) => b.lastActivity.localeCompare(a.lastActivity))
+}
+
+/** Scoped version — builds overview from a pre-filtered response list */
+export function buildSpeakingOverviewFromResponses(responses: TeacherSpeakingResponse[]): StudentSpeakingOverview[] {
+    const map = new Map<string, {
+        studentName: string
+        studentEmail: string
+        studentGroup: string
+        responses: TeacherSpeakingResponse[]
+    }>()
+
+    for (const r of responses) {
+        if (!map.has(r.studentId)) {
+            map.set(r.studentId, {
+                studentName: r.studentName,
+                studentEmail: r.studentEmail || '',
+                studentGroup: r.studentGroup || '',
+                responses: [],
+            })
+        }
+        map.get(r.studentId)!.responses.push(r)
+    }
+
+    const SESSION_WINDOW_MS = 30 * 60 * 1000
+    const result: StudentSpeakingOverview[] = []
+
+    for (const [studentId, entry] of map) {
+        const entryResponses = entry.responses
+        const sorted = entryResponses.slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+
+        let sessionCount = 0
+        const sessionGroups: string[] = []
+        for (const r of sorted) {
+            const t = new Date(r.createdAt).getTime()
+            const match = sessionGroups.findIndex((lastTime, idx) => {
+                const groups = sorted.filter((s, i) => i < idx + 1)
+                const last = groups[groups.length - 1]
+                return last?.assignmentId === r.assignmentId &&
+                    Math.abs(new Date(last.createdAt).getTime() - t) < SESSION_WINDOW_MS
+            })
+            if (match === -1) {
+                sessionCount++
+                sessionGroups.push(r.createdAt)
+            }
+        }
+
+        const totalSpeaking = entryResponses.reduce((sum, r) => sum + (r.speakingSeconds || 0), 0)
+        const avgSpeaking = entryResponses.length > 0 ? Math.round(totalSpeaking / entryResponses.length) : 0
+        const totalWarnings = entryResponses.reduce((sum, r) => sum + (r.warningCount || 0), 0)
+        const analyzed = entryResponses.filter(r => r.aiAnalysis)
+        const avgBand = analyzed.length > 0
+            ? Math.round((analyzed.reduce((sum, r) => sum + (r.aiAnalysis!.overallBand || 0), 0) / analyzed.length) * 10) / 10
+            : null
+        const lastActivity = entryResponses.reduce((max, r) => r.createdAt > max ? r.createdAt : max, '')
+
+        result.push({
+            studentId,
+            studentName: entry.studentName,
+            studentEmail: entry.studentEmail,
+            studentGroup: entry.studentGroup,
+            totalResponses: entryResponses.length,
             totalSessions: sessionCount,
             avgSpeakingSeconds: avgSpeaking,
             totalWarnings,

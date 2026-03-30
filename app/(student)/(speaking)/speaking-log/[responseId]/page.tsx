@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { onAuthStateChanged } from 'firebase/auth'
 import StudentLayout from '@/components/StudentLayout'
@@ -38,7 +38,7 @@ export default function SpeakingLogDetailPage() {
     const [studentId, setStudentId] = useState<string | null>(null)
     // Map of responseId -> 'transcribing' | 'done' | 'error'
     const [transcribeStatus, setTranscribeStatus] = useState<Record<string, 'transcribing' | 'done' | 'error'>>({})
-    const transcribingRef = useRef(false)
+
 
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -75,44 +75,8 @@ export default function SpeakingLogDetailPage() {
         return { target: found, sessionResponses: session }
     }, [allResponses, params.responseId])
 
-    // Auto-transcribe responses with empty transcripts (on review=true or when audioUrl exists but no transcript)
-    useEffect(() => {
-        if (!studentId || loading || !target || transcribingRef.current) return
-
-        const needsTranscription = sessionResponses.filter(r => !r.transcript && r.audioUrl)
-        if (needsTranscription.length === 0) return
-
-        transcribingRef.current = true
-
-        const runTranscription = async () => {
-            for (const r of needsTranscription) {
-                setTranscribeStatus(prev => ({ ...prev, [r.id]: 'transcribing' }))
-                try {
-                    const res = await fetch('/api/speaking/transcribe', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ audioUrl: r.audioUrl }),
-                    })
-                    const data = await res.json()
-                    if (res.ok && typeof data?.text === 'string') {
-                        const transcript = data.text.trim()
-                        // Update local state
-                        setAllResponses(prev => prev.map(p => p.id === r.id ? { ...p, transcript } : p))
-                        // Persist to Firestore
-                        await updateResponseTranscript(studentId, r.id, transcript)
-                        setTranscribeStatus(prev => ({ ...prev, [r.id]: 'done' }))
-                    } else {
-                        setTranscribeStatus(prev => ({ ...prev, [r.id]: 'error' }))
-                    }
-                } catch {
-                    setTranscribeStatus(prev => ({ ...prev, [r.id]: 'error' }))
-                }
-            }
-            transcribingRef.current = false
-        }
-
-        void runTranscription()
-    }, [studentId, loading, target, sessionResponses])
+    // Transcription is deferred — only runs when student clicks "Send for Analysis"
+    // (auto-transcription removed intentionally)
 
     const alreadySent = sessionResponses.length > 0 && sessionResponses.every(r => r.sentForAnalysis)
 
@@ -121,6 +85,31 @@ export default function SpeakingLogDetailPage() {
         setSending(true)
         setError(null)
         try {
+            // Step 1: Transcribe each response that needs it
+            for (const r of sessionResponses) {
+                if (!r.transcript && r.audioUrl) {
+                    setTranscribeStatus(prev => ({ ...prev, [r.id]: 'transcribing' }))
+                    try {
+                        const res = await fetch('/api/speaking/transcribe', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ audioUrl: r.audioUrl }),
+                        })
+                        const data = await res.json()
+                        if (res.ok && typeof data?.text === 'string') {
+                            const transcript = data.text.trim()
+                            await updateResponseTranscript(studentId, r.id, transcript)
+                            setAllResponses(prev => prev.map(p => p.id === r.id ? { ...p, transcript } : p))
+                            setTranscribeStatus(prev => ({ ...prev, [r.id]: 'done' }))
+                        } else {
+                            setTranscribeStatus(prev => ({ ...prev, [r.id]: 'error' }))
+                        }
+                    } catch {
+                        setTranscribeStatus(prev => ({ ...prev, [r.id]: 'error' }))
+                    }
+                }
+            }
+            // Step 2: Mark all as sent for analysis
             const ids = sessionResponses.map(r => r.id)
             await sendSessionForAnalysis(studentId, ids)
             setAllResponses(prev => prev.map(r => ids.includes(r.id) ? { ...r, sentForAnalysis: true } : r))
@@ -196,10 +185,10 @@ export default function SpeakingLogDetailPage() {
                         </p>
                     </div>
                     <div className="flex items-center gap-2 pt-7 flex-wrap">
-                        {isTranscribing && (
+                        {sending && isTranscribing && (
                             <span className="flex items-center gap-2 text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
                                 <span className="animate-spin inline-block w-3 h-3 border border-slate-400 border-t-transparent rounded-full" />
-                                Transcribing with Groq...
+                                Transcribing your recordings…
                             </span>
                         )}
                         {alreadySent ? (
@@ -210,20 +199,24 @@ export default function SpeakingLogDetailPage() {
                             <button
                                 type="button"
                                 onClick={() => void handleSendForAnalysis()}
-                                disabled={sending || isTranscribing}
+                                disabled={sending}
                                 className="px-4 py-2 rounded-xl bg-[#1a9aaa] hover:bg-[#127080] text-white text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                             >
-                                {sending ? 'Sending...' : 'Send for Analysis'}
+                                {sending
+                                    ? (isTranscribing ? 'Transcribing…' : 'Sending…')
+                                    : 'Send for Analysis'}
                             </button>
                         )}
-                        <button
-                            type="button"
-                            onClick={() => void handleDelete()}
-                            disabled={deleting}
-                            className="px-4 py-2 rounded-xl bg-red-500 hover:bg-red-600 text-white text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        >
-                            {deleting ? 'Deleting...' : 'Delete'}
-                        </button>
+                        {!alreadySent && (
+                            <button
+                                type="button"
+                                onClick={() => void handleDelete()}
+                                disabled={deleting}
+                                className="px-4 py-2 rounded-xl bg-red-500 hover:bg-red-600 text-white text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            >
+                                {deleting ? 'Deleting...' : 'Delete'}
+                            </button>
+                        )}
                     </div>
                 </div>
 
@@ -231,9 +224,9 @@ export default function SpeakingLogDetailPage() {
                     <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">{error}</div>
                 )}
 
-                {isReview && isTranscribing && (
+                {sending && isTranscribing && (
                     <div className="rounded-2xl border border-blue-100 bg-blue-50 px-5 py-4 text-sm text-blue-700">
-                        Your recording is being transcribed. This only takes a few seconds with Groq.
+                        Transcribing your recordings before sending — this only takes a few seconds.
                     </div>
                 )}
 
@@ -281,7 +274,11 @@ export default function SpeakingLogDetailPage() {
                                     ) : response.transcript ? (
                                         <div className="text-base leading-8 text-slate-700 whitespace-pre-wrap">{response.transcript}</div>
                                     ) : (
-                                        <div className="text-base text-slate-400 italic">No transcript captured for this attempt.</div>
+                                        <div className="text-base text-slate-400 italic">
+                                            {response.sentForAnalysis
+                                                ? 'No transcript captured for this attempt.'
+                                                : 'Transcript will appear after you send for analysis.'}
+                                        </div>
                                     )}
                                     {response.audioUrl && (
                                         <audio

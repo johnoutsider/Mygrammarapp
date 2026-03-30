@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import * as XLSX from 'xlsx'
 
 interface Answer {
     id: number
@@ -30,71 +31,75 @@ export default function CsvImportModal({
 
     // ── Download template ──────────────────────────────────────────────────────
     const downloadTemplate = () => {
-        const content = [
-            'Question,Answer1,Answer2,Answer3,Answer4,CorrectAnswer',
-            'What is the past tense of "go"?,went,goed,gone,going,1',
-            'Which article is used before a vowel sound?,a,an,the,—,2',
-        ].join('\n')
-
-        const blob = new Blob([content], { type: 'text/csv' })
-        const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
-        a.href = url
-        a.download = 'quiz-template.csv'
+        a.href = '/excel_template.xlsx'
+        a.download = 'quiz-template.xlsx'
         a.click()
-        URL.revokeObjectURL(url)
     }
 
     // ── Copy template to clipboard ─────────────────────────────────────────────
     const copyTemplate = () => {
         const content = [
-            'Question,Answer1,Answer2,Answer3,Answer4,CorrectAnswer',
-            'What is the past tense of "go"?,went,goed,gone,going,1',
+            'Question #,Question Text,Answer 1,Answer 2,Answer 3,Answer 4,Time Limit (sec),Correct Answer(s)',
+            '1,What is the past tense of "go"?,went,goed,gone,going,20,1',
         ].join('\n')
         navigator.clipboard.writeText(content)
     }
 
-    // ── CSV parser ─────────────────────────────────────────────────────────────
-    function parseCsv(text: string): Question[] {
-        const lines = text
-            .split('\n')
-            .map(l => l.trim())
-            .filter(l => l.length > 0)
+    // ── Parse rows (shared for CSV and Excel) ─────────────────────────────────
+    // col[0]=Question#(skip), col[1]=QuestionText, col[2-5]=Answers,
+    // col[6]=TimeLimit, col[7]=CorrectAnswer(s) 1-based comma-separated
+    function parseRows(rows: (string | number)[][]): Question[] {
+        if (rows.length < 2) return []
+        return rows.slice(1).map((cols, i) => {
+            const text = String(cols[1] ?? '').trim()
+            if (!text) return null
 
-        if (lines.length < 2) return []
+            const rawCorrect = String(cols[7] ?? '').trim()
+            const correctIndices = new Set(
+                rawCorrect.split(',').map(s => parseInt(s.trim()) - 1).filter(n => !isNaN(n) && n >= 0)
+            )
 
-        // Skip header row
-        return lines.slice(1).map((line, i) => {
-            // Handle commas inside quotes
+            const timeLimitRaw = parseInt(String(cols[6] ?? ''))
+            const timeLimit = isNaN(timeLimitRaw) || timeLimitRaw <= 0 ? 20 : Math.min(timeLimitRaw, 300)
+
+            return {
+                id: Date.now() + i,
+                text,
+                type: 'quiz' as const,
+                timeLimit,
+                answers: [
+                    { id: 1, text: String(cols[2] ?? '').trim(), isCorrect: correctIndices.has(0), explanation: '' },
+                    { id: 2, text: String(cols[3] ?? '').trim(), isCorrect: correctIndices.has(1), explanation: '' },
+                    { id: 3, text: String(cols[4] ?? '').trim(), isCorrect: correctIndices.has(2), explanation: '' },
+                    { id: 4, text: String(cols[5] ?? '').trim(), isCorrect: correctIndices.has(3), explanation: '' },
+                ].filter(a => a.text !== '')
+            }
+        }).filter((q): q is Question => q !== null && q.answers.length >= 2)
+    }
+
+    function parseCsvText(text: string): Question[] {
+        const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+        const rows = lines.map(line => {
             const cols: string[] = []
             let current = ''
             let inQuotes = false
             for (const char of line) {
                 if (char === '"') { inQuotes = !inQuotes }
-                else if (char === ',' && !inQuotes) {
-                    cols.push(current.trim())
-                    current = ''
-                } else {
-                    current += char
-                }
+                else if (char === ',' && !inQuotes) { cols.push(current.trim()); current = '' }
+                else { current += char }
             }
             cols.push(current.trim())
+            return cols
+        })
+        return parseRows(rows as (string | number)[][])
+    }
 
-            const correctIndex = parseInt(cols[5]) - 1 // 1-4 → 0-3
-
-            return {
-                id: Date.now() + i,
-                text: cols[0] || '',
-                type: 'quiz' as const,
-                timeLimit: 20,
-                answers: [
-                    { id: 1, text: cols[1] || '', isCorrect: correctIndex === 0, explanation: '' },
-                    { id: 2, text: cols[2] || '', isCorrect: correctIndex === 1, explanation: '' },
-                    { id: 3, text: cols[3] || '', isCorrect: correctIndex === 2, explanation: '' },
-                    { id: 4, text: cols[4] || '', isCorrect: correctIndex === 3, explanation: '' },
-                ].filter(a => a.text.trim() !== '')
-            }
-        }).filter(q => q.text.trim() !== '')
+    function parseExcelBuffer(buffer: ArrayBuffer): Question[] {
+        const workbook = XLSX.read(buffer, { type: 'array' })
+        const sheet = workbook.Sheets[workbook.SheetNames[0]]
+        const rows = XLSX.utils.sheet_to_json<(string | number)[]>(sheet, { header: 1, defval: '' })
+        return parseRows(rows)
     }
 
     // ── Handle file upload ─────────────────────────────────────────────────────
@@ -107,16 +112,23 @@ export default function CsvImportModal({
         setImporting(true)
 
         try {
-            const text = await file.text()
-            const questions = parseCsv(text)
+            const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls')
+            let questions: Question[]
+
+            if (isExcel) {
+                const buffer = await file.arrayBuffer()
+                questions = parseExcelBuffer(buffer)
+            } else {
+                const text = await file.text()
+                questions = parseCsvText(text)
+            }
 
             if (questions.length === 0) {
-                setError('No valid questions found. Please check your CSV format.')
+                setError('No valid questions found. Check that your file matches the template columns.')
                 setImporting(false)
                 return
             }
 
-            // Check each question has at least one correct answer
             const invalid = questions.filter(q => !q.answers.some(a => a.isCorrect))
             if (invalid.length > 0) {
                 setError(`${invalid.length} row(s) have an invalid CorrectAnswer value. Must be 1–4.`)
@@ -127,7 +139,6 @@ export default function CsvImportModal({
             setResult({ count: questions.length })
             setImporting(false)
 
-            // Short delay so user sees success message
             setTimeout(() => {
                 onImport(questions)
                 onClose()
@@ -135,11 +146,10 @@ export default function CsvImportModal({
 
         } catch (err) {
             console.error(err)
-            setError('Failed to read file. Please make sure it is a valid CSV.')
+            setError('Failed to read file. Make sure it is a valid Excel (.xlsx) or CSV file.')
             setImporting(false)
         }
 
-        // Reset input so same file can be re-uploaded
         e.target.value = ''
     }
 
@@ -183,7 +193,7 @@ export default function CsvImportModal({
                             {' '}our template.
                         </p>
                         <p className="text-sm text-slate-600">
-                            2. Fill it out and export as CSV
+                            2. Fill it out and save as Excel
                         </p>
                         <p className="text-sm text-slate-600">
                             3. Upload Below
@@ -193,16 +203,18 @@ export default function CsvImportModal({
                     {/* Column guide */}
                     <div className="bg-slate-50 rounded-xl px-4 py-3">
                         <p className="text-xs font-bold text-slate-500 mb-2">
-                            Required columns:
+                            Template columns (in order):
                         </p>
                         <div className="grid grid-cols-3 gap-1">
                             {[
-                                'Question',
-                                'Answer1',
-                                'Answer2',
-                                'Answer3',
-                                'Answer4',
-                                'CorrectAnswer (1–4)',
+                                'Question #',
+                                'Question Text',
+                                'Answer 1',
+                                'Answer 2',
+                                'Answer 3',
+                                'Answer 4',
+                                'Time Limit (sec)',
+                                'Correct Answer(s)',
                             ].map((col, i) => (
                                 <span
                                     key={i}
@@ -213,7 +225,7 @@ export default function CsvImportModal({
                             ))}
                         </div>
                         <p className="text-[10px] text-slate-400 mt-2">
-                            CorrectAnswer is a number 1–4 indicating which answer is correct
+                            Correct Answer is 1–4 (comma-separated for multiple, e.g. "1,3")
                         </p>
                     </div>
 
@@ -241,10 +253,10 @@ export default function CsvImportModal({
                         ${importing || result
                             ? 'bg-teal-300 cursor-not-allowed'
                             : 'bg-teal-500 hover:bg-teal-600'}`}>
-                        {importing ? '⏳ Reading file...' : result ? '✅ Imported!' : '📁 Upload CSV'}
+                        {importing ? '⏳ Reading file...' : result ? '✅ Imported!' : '📁 Upload Excel / CSV'}
                         <input
                             type="file"
-                            accept=".csv"
+                            accept=".xlsx,.xls,.csv"
                             className="hidden"
                             disabled={importing || !!result}
                             onChange={handleFileUpload}
@@ -252,7 +264,7 @@ export default function CsvImportModal({
                     </label>
 
                     <p className="text-xs text-slate-400 text-center">
-                        Questions will be added to your existing quiz — nothing will be overwritten
+                        Accepts .xlsx, .xls, or .csv — questions will be added to your quiz
                     </p>
                 </div>
 

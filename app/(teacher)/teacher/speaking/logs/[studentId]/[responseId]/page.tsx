@@ -36,7 +36,7 @@ export default function TeacherSessionDetailPage() {
     useEffect(() => {
         const load = async () => {
             try {
-                const data = await listAllSpeakingResponses()
+                const data = await listAllSpeakingResponses({ onlySent: true })
                 setAllResponses(data.filter(r => r.studentId === params.studentId))
             } catch (err) {
                 console.error(err)

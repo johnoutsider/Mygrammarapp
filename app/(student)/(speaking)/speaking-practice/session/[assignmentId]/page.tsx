@@ -1,8 +1,9 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import Script from 'next/script'
+import { Video, Mic } from 'lucide-react'
 import StudentLayout from '@/components/StudentLayout'
 import { useAccessGuard } from '@/hooks/useAccessGuard'
 import { getUserProfile } from '@/lib/auth'
@@ -42,12 +43,6 @@ function clampRisk(value: number): number {
     return Math.max(0, Math.min(100, value))
 }
 
-function getRingColor(riskLevel: number, detectionEnabled: boolean): string {
-    if (!detectionEnabled) return '#f59e0b'
-    if (riskLevel >= 60) return '#ef4444'
-    if (riskLevel >= 30) return '#f59e0b'
-    return '#22c55e'
-}
 
 function getRiskLabel(riskLevel: number, detectionEnabled: boolean): string {
     if (!detectionEnabled) return 'Detection fallback mode'
@@ -87,6 +82,8 @@ export default function SpeakingSessionPage() {
     const searchParams = useSearchParams()
     const router = useRouter()
     const videoRef = useRef<HTMLVideoElement | null>(null)
+    const previewVideoRef = useRef<HTMLVideoElement | null>(null)
+    const previewStreamRef = useRef<MediaStream | null>(null)
     const faceMeshRef = useRef<InstanceType<NonNullable<typeof window.FaceMesh>> | null>(null)
     const frameRequestRef = useRef<number | null>(null)
     const sessionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -129,11 +126,14 @@ export default function SpeakingSessionPage() {
     const [error, setError] = useState<string | null>(null)
     const [detectionEnabled, setDetectionEnabled] = useState(true)
     const [riskLevel, setRiskLevel] = useState(0)
+    const [permissionDenied, setPermissionDenied] = useState(false)
+    const [previewActive, setPreviewActive] = useState(false)
 
     // Keep refs in sync with state so useEffect callbacks can read the latest values
     selectedVideoIdRef.current = selectedVideoId
     selectedAudioIdRef.current = selectedAudioId
 
+    const skipSetup = searchParams.get('skipSetup') === 'true'
     const stepIndex = useMemo(() => getStepIndex(searchParams.get('step'), assignment?.questionSteps.length ?? 1), [assignment?.questionSteps.length, searchParams])
     const currentStep: SpeakingQuestionStep | null = assignment?.questionSteps[stepIndex] ?? null
 
@@ -194,6 +194,30 @@ export default function SpeakingSessionPage() {
 
         if (videoRef.current) videoRef.current.srcObject = null
     }, [])
+
+    const stopPreview = useCallback(() => {
+        previewStreamRef.current?.getTracks().forEach(t => t.stop())
+        previewStreamRef.current = null
+        setPreviewActive(false)
+    }, [])
+
+    const switchPreviewCamera = useCallback(async (deviceId: string) => {
+        stopPreview()
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: deviceId ? { deviceId: { exact: deviceId } } : true,
+                audio: false,
+            })
+            previewStreamRef.current = stream
+            if (previewVideoRef.current) {
+                previewVideoRef.current.srcObject = stream
+                await previewVideoRef.current.play().catch(() => {})
+            }
+            setPreviewActive(true)
+        } catch {
+            // ignore preview switch failure
+        }
+    }, [stopPreview])
 
     const saveAndExit = useCallback(async () => {
         if (!assignment || !currentStep || savedRef.current) return
@@ -262,6 +286,12 @@ export default function SpeakingSessionPage() {
                 // Go back to the prep page for the next step (runs countdown before starting next session)
                 router.replace(`/speaking-practice?assignmentId=${assignment.id}&step=${stepIndex + 1}`)
                 return
+            }
+
+            // Last question done — clear device sessionStorage so next session starts fresh at setup
+            if (typeof window !== 'undefined') {
+                sessionStorage.removeItem('speaking_camera_id')
+                sessionStorage.removeItem('speaking_mic_id')
             }
 
             // Redirect to review page after last step so student can review + send/delete
@@ -359,9 +389,19 @@ export default function SpeakingSessionPage() {
         setRemainingSeconds(assignment.speakingSeconds)
     }, [assignment, stepIndex])
 
+    // If skipSetup=true, restore device IDs from sessionStorage and start immediately
+    useEffect(() => {
+        if (loading || !assignment || sessionStarted || !skipSetup) return
+        const camId = typeof window !== 'undefined' ? sessionStorage.getItem('speaking_camera_id') : null
+        const micId = typeof window !== 'undefined' ? sessionStorage.getItem('speaking_mic_id') : null
+        if (camId) setSelectedVideoId(camId)
+        if (micId) setSelectedAudioId(micId)
+        setSessionStarted(true)
+    }, [loading, assignment, sessionStarted, skipSetup])
+
     // Enumerate camera/mic devices for the setup screen
     useEffect(() => {
-        if (loading || !assignment || sessionStarted) return
+        if (loading || !assignment || sessionStarted || skipSetup) return
         const enumDevices = async () => {
             try {
                 const tempStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
@@ -374,12 +414,37 @@ export default function SpeakingSessionPage() {
                 // Auto-select the first available device so no manual picking is needed
                 if (vids.length > 0) setSelectedVideoId(vids[0].deviceId)
                 if (auds.length > 0) setSelectedAudioId(auds[0].deviceId)
+                // Start live camera preview
+                if (vids.length > 0) {
+                    try {
+                        const previewStream = await navigator.mediaDevices.getUserMedia({
+                            video: { deviceId: { exact: vids[0].deviceId } },
+                            audio: false,
+                        })
+                        previewStreamRef.current = previewStream
+                        if (previewVideoRef.current) {
+                            previewVideoRef.current.srcObject = previewStream
+                            previewVideoRef.current.muted = true
+                            previewVideoRef.current.playsInline = true
+                            await previewVideoRef.current.play().catch(() => {})
+                        }
+                        setPreviewActive(true)
+                    } catch {
+                        // Preview failed but devices are still available
+                    }
+                }
             } catch (err) {
                 console.error('Device enumeration error:', err)
+                setPermissionDenied(true)
             }
         }
         void enumDevices()
     }, [loading, assignment, sessionStarted])
+
+    // Stop preview when session starts so it releases the camera for the real stream
+    useEffect(() => {
+        if (sessionStarted) stopPreview()
+    }, [sessionStarted, stopPreview])
 
     useEffect(() => {
         if (!assignment || !currentStep || !scriptsReady || loading || !sessionStarted) return
@@ -525,152 +590,226 @@ export default function SpeakingSessionPage() {
         )
     }
 
-    const ringColor = getRingColor(riskLevel, detectionEnabled)
-    const progressPct = assignment ? (remainingSeconds / assignment.speakingSeconds) * 100 : 100
-
     // ── Device setup screen ──
     if (!sessionStarted && assignment) {
-        const selectClass = 'w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-[#4c75c3]'
+        const selectClass = 'w-full px-3.5 py-3 border border-slate-200 rounded-xl bg-slate-50 text-sm text-slate-800 appearance-none focus:outline-none focus:ring-2 focus:ring-[#5b7ec9] focus:border-[#5b7ec9] transition-colors'
         return (
-            <StudentLayout title="Speaking Session">
+            <>
                 <Script
                     src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"
                     strategy="afterInteractive"
                     onLoad={() => setScriptsReady(true)}
                     onError={() => { setScriptsReady(true); setDetectionEnabled(false) }}
                 />
-                <div className="max-w-lg mx-auto px-4 py-10 space-y-6">
-                    <div>
-                        <h1 className="text-2xl font-bold text-slate-900">Set Up Your Devices</h1>
-                        <p className="text-sm text-slate-500 mt-1">Choose your camera and microphone before starting.</p>
-                    </div>
+                <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6">
+                    <div className="bg-white rounded-2xl shadow-lg px-10 py-10 w-full max-w-[560px]">
 
-                    {error && (
-                        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
-                    )}
+                        {/* Header */}
+                        <div className="flex items-center gap-3 mb-1">
+                            <div className="w-11 h-11 bg-indigo-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                                <Video className="w-5 h-5 text-[#5b7ec9]" />
+                            </div>
+                            <h1 className="text-2xl font-bold text-slate-900">Device Setup</h1>
+                        </div>
+                        <p className="text-sm text-slate-400 mb-8 ml-14">Allow access and select your camera and microphone before continuing.</p>
 
-                    <div className="space-y-4">
-                        <div>
-                            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Camera</label>
-                            <select
-                                value={selectedVideoId}
-                                onChange={e => setSelectedVideoId(e.target.value)}
-                                className={selectClass}
-                            >
-                                <option value="">Default camera</option>
-                                {videoDevices.map(d => (
-                                    <option key={d.deviceId} value={d.deviceId}>
-                                        {d.label || `Camera ${d.deviceId.slice(0, 8)}`}
-                                    </option>
-                                ))}
-                            </select>
+                        {/* Live preview */}
+                        <div className="w-full aspect-video bg-slate-900 rounded-2xl overflow-hidden relative mb-7 flex items-center justify-center">
+                            <video
+                                ref={previewVideoRef}
+                                autoPlay
+                                playsInline
+                                muted
+                                className={`w-full h-full object-cover rounded-2xl ${previewActive ? '' : 'hidden'}`}
+                            />
+                            {!previewActive && (
+                                <div className="flex flex-col items-center gap-2.5 text-slate-600">
+                                    <Video className="w-9 h-9 stroke-[1.4]" />
+                                    <span className="text-sm">Camera preview will appear here</span>
+                                </div>
+                            )}
+                            {previewActive && (
+                                <div className="absolute bottom-3 left-3 bg-black/55 text-white text-xs font-semibold px-3 py-1 rounded-full tracking-wide">
+                                    ● LIVE
+                                </div>
+                            )}
                         </div>
 
-                        <div>
-                            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Microphone</label>
-                            <select
-                                value={selectedAudioId}
-                                onChange={e => setSelectedAudioId(e.target.value)}
-                                className={selectClass}
-                            >
-                                <option value="">Default microphone</option>
-                                {audioDevices.map(d => (
-                                    <option key={d.deviceId} value={d.deviceId}>
-                                        {d.label || `Microphone ${d.deviceId.slice(0, 8)}`}
-                                    </option>
-                                ))}
-                            </select>
+                        {/* Dropdowns */}
+                        <div className="flex flex-col gap-4 mb-7">
+                            <div>
+                                <label className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-widest text-slate-500 mb-2">
+                                    <Video className="w-3 h-3" /> Camera
+                                </label>
+                                <select
+                                    value={selectedVideoId}
+                                    onChange={e => { setSelectedVideoId(e.target.value); void switchPreviewCamera(e.target.value) }}
+                                    className={selectClass}
+                                >
+                                    {permissionDenied
+                                        ? <option>Permission denied</option>
+                                        : videoDevices.map((d, i) => (
+                                            <option key={d.deviceId} value={d.deviceId}>{d.label || `Camera ${i + 1}`}</option>
+                                        ))
+                                    }
+                                </select>
+                            </div>
+                            <div>
+                                <label className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-widest text-slate-500 mb-2">
+                                    <Mic className="w-3 h-3" /> Microphone
+                                </label>
+                                <select
+                                    value={selectedAudioId}
+                                    onChange={e => setSelectedAudioId(e.target.value)}
+                                    className={selectClass}
+                                >
+                                    {permissionDenied
+                                        ? <option>Permission denied</option>
+                                        : audioDevices.map((d, i) => (
+                                            <option key={d.deviceId} value={d.deviceId}>{d.label || `Microphone ${i + 1}`}</option>
+                                        ))
+                                    }
+                                </select>
+                            </div>
                         </div>
-                    </div>
 
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-5 py-4">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-1">
-                            {assignment.partLabel} &mdash; Step {stepIndex + 1} of {assignment.questionSteps.length}
+                        {/* Status indicators */}
+                        <div className="flex gap-2.5 mb-7">
+                            <div className="flex-1 flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-500 font-medium">
+                                <span className={`w-2 h-2 rounded-full flex-shrink-0 transition-all ${permissionDenied ? 'bg-red-500' : videoDevices.length > 0 ? 'bg-green-500 shadow-[0_0_0_3px_rgba(34,197,94,0.2)]' : 'bg-slate-300'}`} />
+                                Camera
+                            </div>
+                            <div className="flex-1 flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-500 font-medium">
+                                <span className={`w-2 h-2 rounded-full flex-shrink-0 transition-all ${permissionDenied ? 'bg-red-500' : audioDevices.length > 0 ? 'bg-green-500 shadow-[0_0_0_3px_rgba(34,197,94,0.2)]' : 'bg-slate-300'}`} />
+                                Microphone
+                            </div>
                         </div>
-                        <div className="text-base font-semibold text-slate-900">{currentStep?.text}</div>
-                    </div>
 
-                    <button
-                        onClick={() => setSessionStarted(true)}
-                        disabled={!scriptsReady}
-                        className="w-full px-6 py-3 rounded-xl bg-[#4c75c3] hover:bg-[#3f64ab] text-white font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                        {scriptsReady ? 'Start Session' : 'Loading face detection...'}
-                    </button>
+                        {/* Button */}
+                        <button
+                            onClick={() => {
+                                // Persist selected devices so the prep page can pass skipSetup=true
+                                if (typeof window !== 'undefined') {
+                                    sessionStorage.setItem('speaking_camera_id', selectedVideoId)
+                                    sessionStorage.setItem('speaking_mic_id', selectedAudioId)
+                                }
+                                stopPreview()
+                                // Redirect to prep page — it will show the question + timer
+                                router.replace(`/speaking-practice?assignmentId=${params.assignmentId}`)
+                            }}
+                            disabled={!scriptsReady || permissionDenied}
+                            className="w-full py-4 bg-[#5b7ec9] hover:bg-[#4a6db8] text-white font-semibold rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-base"
+                        >
+                            {scriptsReady ? 'Continue' : 'Loading face detection...'}
+                        </button>
+                        <p className="text-center text-xs text-slate-400 mt-3">
+                            {permissionDenied
+                                ? 'Permission denied. Please allow camera & microphone access.'
+                                : videoDevices.length > 0
+                                    ? 'Devices ready. You can continue.'
+                                    : 'Waiting for permissions\u2026'}
+                        </p>
+
+                    </div>
                 </div>
-            </StudentLayout>
+            </>
         )
     }
 
+    const riskTier = riskLevel >= 60 ? 'high' : riskLevel >= 30 ? 'medium' : 'low'
+    const countdownFormatted = `${Math.floor(remainingSeconds / 60)}:${String(remainingSeconds % 60).padStart(2, '0')}`
+
+    const camBorderStyle: React.CSSProperties =
+        riskTier === 'high'
+            ? { border: '5px solid #ef4444', boxShadow: '0 0 0 5px rgba(239,68,68,0.35), 0 0 28px rgba(239,68,68,0.3)', animation: 'redPulse 1.2s ease-in-out infinite' }
+            : riskTier === 'medium'
+                ? { border: '5px solid #f59e0b', boxShadow: '0 0 0 5px rgba(245,158,11,0.3), 0 0 22px rgba(245,158,11,0.25)' }
+                : { border: '5px solid #22c55e', boxShadow: '0 0 0 4px rgba(34,197,94,0.25), 0 0 18px rgba(34,197,94,0.2)' }
+
     return (
-        <StudentLayout title="Speaking Session">
+        <>
             <Script
                 src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"
                 strategy="afterInteractive"
                 onLoad={() => setScriptsReady(true)}
-                onError={() => {
-                    setScriptsReady(true)
-                    setDetectionEnabled(false)
-                }}
+                onError={() => { setScriptsReady(true); setDetectionEnabled(false) }}
             />
+            <style>{`
+                @keyframes redPulse {
+                    0%,100% { box-shadow: 0 0 0 5px rgba(239,68,68,0.35), 0 0 28px rgba(239,68,68,0.3); }
+                    50%      { box-shadow: 0 0 0 8px rgba(239,68,68,0.5),  0 0 40px rgba(239,68,68,0.45); }
+                }
+                @keyframes liveDot {
+                    0%,100% { opacity: 1; } 50% { opacity: 0.3; }
+                }
+                .live-dot-anim { animation: liveDot 1.4s ease-in-out infinite; }
+            `}</style>
 
-            <div className="h-full flex flex-col lg:flex-row items-start justify-center gap-5 p-4 lg:p-6 max-w-5xl mx-auto w-full overflow-hidden">
+            <div className="min-h-screen bg-slate-100 flex items-center justify-center p-8">
+                <div className="bg-white rounded-3xl shadow-lg p-7 w-full max-w-[480px] flex flex-col gap-5">
 
-                {/* ── Video panel ── */}
-                <div className="flex flex-col items-center gap-3 w-full lg:w-[420px] lg:flex-shrink-0">
+                    {/* Camera */}
                     <div
-                        className="w-full rounded-2xl overflow-hidden bg-slate-950 shadow-lg transition-colors duration-500"
-                        style={{ border: `4px solid ${ringColor}`, aspectRatio: '1 / 1.1' }}
+                        className="w-full rounded-2xl overflow-hidden bg-slate-900 relative transition-all duration-500"
+                        style={{ aspectRatio: '1/1', ...camBorderStyle }}
                     >
                         <video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
+                        {/* LIVE pill */}
+                        <div className="absolute top-3 left-3 bg-black/55 text-white text-[0.65rem] font-bold tracking-widest px-2.5 py-1 rounded-full flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-green-400 live-dot-anim" />
+                            LIVE
+                        </div>
                     </div>
 
-                    {/* Countdown card */}
-                    <div className="w-full bg-white rounded-xl px-4 py-2.5 shadow-sm">
-                        <div className="flex justify-between items-center mb-1.5">
-                            <span className="text-xs font-medium text-slate-500">Step {stepIndex + 1} Countdown</span>
-                            <span className="text-lg font-bold text-slate-800">{remainingSeconds}s</span>
-                        </div>
-                        <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                            <div
-                                className="h-full rounded-full transition-all duration-1000"
-                                style={{ width: `${progressPct}%`, backgroundColor: ringColor }}
-                            />
-                        </div>
-                        <div className="mt-1 text-xs text-slate-400">Detection risk: {riskLevel}%</div>
-                    </div>
-                </div>
-
-                {/* ── Info panel ── */}
-                <div className="flex flex-col justify-center gap-4 flex-1 min-h-0 lg:pt-2">
-                    {error && (
-                        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
-                    )}
-
+                    {/* Topic */}
                     <div>
-                        <div className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400 mb-1.5">
+                        <div className="text-[0.68rem] font-bold uppercase tracking-[0.1em] text-slate-400 mb-1.5">
                             {assignment?.partLabel || 'Speaking'} &mdash; Step {stepIndex + 1} of {assignment?.questionSteps.length || 1}
                         </div>
-                        <h1 className="text-xl lg:text-3xl font-bold text-slate-900 leading-snug">
-                            {currentStep?.text || (starting ? 'Starting your speaking timer...' : 'Answer the question clearly and naturally')}
+                        <h1 className="text-2xl font-bold text-slate-900 leading-snug">
+                            {currentStep?.text || (starting ? 'Starting...' : 'Answer the question')}
                         </h1>
                     </div>
 
-                    <div className="space-y-1">
-                        <p className="text-sm text-slate-500">{status}</p>
-                        <p className={`text-xs font-semibold ${riskLevel >= 60 ? 'text-red-600' : riskLevel >= 30 ? 'text-amber-600' : 'text-green-600'}`}>
+                    {/* Warning — only visible at high risk */}
+                    {riskTier === 'high' && (
+                        <div className="flex items-center gap-2.5 bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5 text-sm text-red-500 font-medium">
+                            <svg className="w-4 h-4 flex-shrink-0 stroke-red-500" viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+                                <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                            </svg>
                             {getRiskLabel(riskLevel, detectionEnabled)}
-                        </p>
+                        </div>
+                    )}
+
+                    {/* Stats row */}
+                    <div className="flex border border-slate-200 rounded-2xl overflow-hidden">
+                        <div className="flex-1 flex flex-col items-center py-3.5 gap-1 border-r border-slate-200">
+                            <span className="text-[0.62rem] font-semibold uppercase tracking-widest text-slate-400">Countdown</span>
+                            <span className="text-lg font-bold text-slate-900">{countdownFormatted}</span>
+                        </div>
+                        <div className="flex-1 flex flex-col items-center py-3.5 gap-1 border-r border-slate-200">
+                            <span className="text-[0.62rem] font-semibold uppercase tracking-widest text-slate-400">Status</span>
+                            <span className="text-lg font-bold text-green-600">{starting ? 'Starting' : 'Active'}</span>
+                        </div>
+                        <div className="flex-1 flex flex-col items-center py-3.5 gap-1">
+                            <span className="text-[0.62rem] font-semibold uppercase tracking-widest text-slate-400">Risk</span>
+                            <span className={`text-lg font-bold ${riskTier === 'high' ? 'text-red-500' : riskTier === 'medium' ? 'text-amber-500' : 'text-green-600'}`}>
+                                {riskTier === 'high' ? 'High' : riskTier === 'medium' ? 'Medium' : 'Low'}
+                            </span>
+                        </div>
                     </div>
 
+                    {/* End button */}
                     <button
                         onClick={() => void saveAndExit()}
-                        className="self-start px-4 py-2 rounded-xl text-sm font-semibold text-white bg-slate-700 hover:bg-slate-800 active:scale-95 transition-all"
+                        className="w-full py-4 bg-slate-800 hover:bg-red-500 text-white font-semibold rounded-xl transition-colors text-sm"
                     >
                         End Session
                     </button>
+
                 </div>
             </div>
-        </StudentLayout>
+        </>
     )
 }

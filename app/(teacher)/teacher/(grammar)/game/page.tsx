@@ -40,8 +40,28 @@ export default function TeacherGamePage() {
     }, [router])
 
     useEffect(() => {
-        getDocs(query(collection(db, 'quizzes'), where('status', '==', 'teacher_approved')))
-            .then(snap => setQuizzes(snap.docs.map(d => ({ id: d.id, ...d.data() } as Quiz))))
+        const loadQuizzes = async () => {
+            const user = auth.currentUser
+            if (!user) return
+            const { getUserProfile } = await import('@/lib/auth')
+            const profile = await getUserProfile(user.uid)
+            const classIds: string[] = (profile as any)?.classIds ?? []
+
+            const quizDocs: any[] = []
+            // Fetch approved quizzes from teacher's classes
+            for (let i = 0; i < classIds.length; i += 30) {
+                const chunk = classIds.slice(i, i + 30)
+                const snap = await getDocs(query(collection(db, 'quizzes'), where('classId', 'in', chunk), where('status', '==', 'teacher_approved')))
+                quizDocs.push(...snap.docs)
+            }
+            // Also include teacher's own approved quizzes
+            const teacherSnap = await getDocs(query(collection(db, 'quizzes'), where('createdBy', '==', user.uid), where('status', '==', 'teacher_approved')))
+            const seenIds = new Set(quizDocs.map(d => d.id))
+            teacherSnap.docs.forEach(d => { if (!seenIds.has(d.id)) quizDocs.push(d) })
+
+            setQuizzes(quizDocs.map(d => ({ id: d.id, ...d.data() } as Quiz)))
+        }
+        loadQuizzes()
     }, [])
 
     useEffect(() => {

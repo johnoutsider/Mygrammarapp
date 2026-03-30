@@ -6,7 +6,7 @@ import { auth, db } from '@/lib/firebase';
 import { getUserProfile, UserProfile } from '@/lib/auth';
 import { onAuthStateChanged } from 'firebase/auth';
 import {
-    collection, onSnapshot, query, orderBy,
+    collection, onSnapshot, query, orderBy, where,
     doc, updateDoc, arrayUnion, getDoc, serverTimestamp
 } from 'firebase/firestore';
 import { submitQuizForReview } from '@/lib/quizService';
@@ -115,12 +115,20 @@ function QuizCreatorInner() {
     }, []);
 
     useEffect(() => {
-        const q = query(collection(db, 'topics'), orderBy('createdAt', 'asc'));
-        const unsub = onSnapshot(q, (snap) => {
-            setTopics(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Topic[]);
-        });
-        return () => unsub();
-    }, []);
+        if (!userProfile?.classId) return;
+        let unsub: (() => void) | undefined;
+        (async () => {
+            const { getStudentTeacherId } = await import('@/lib/classService');
+            const teacherId = await getStudentTeacherId(userProfile.classId);
+            const q = teacherId
+                ? query(collection(db, 'topics'), where('teacherId', '==', teacherId), orderBy('createdAt', 'asc'))
+                : query(collection(db, 'topics'), orderBy('createdAt', 'asc'));
+            unsub = onSnapshot(q, (snap) => {
+                setTopics(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Topic[]);
+            });
+        })();
+        return () => unsub?.();
+    }, [userProfile?.classId]);
 
     useEffect(() => {
         const el = questionTextareaRef.current;
