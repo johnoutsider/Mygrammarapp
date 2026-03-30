@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -7,44 +7,25 @@ import TeacherLayout from '@/components/TeacherLayout'
 import { auth } from '@/lib/firebase'
 import { listSpeakingResponsesByStudentIds, TeacherSpeakingResponse } from '@/lib/speakingService'
 import { getUserProfile } from '@/lib/auth'
-import { getStudentsByClassIds } from '@/lib/groupService'
+import { getStudentsByClassIds, StudentProfile } from '@/lib/groupService'
+
+const SESSION_WINDOW_MS = 30 * 60 * 1000
+
+interface GuidedSummary {
+    guidedCount: number
+    lastCompletedAt: string
+}
 
 interface StudentRow {
     studentId: string
     studentName: string
     studentEmail: string
     studentGroup: string
-    sessionCount: number
+    testCount: number
+    guidedCount: number
     lastActivity: string
     hasAnalysis: boolean
-    allSent: boolean
     unanalyzedCount: number
-}
-
-function groupByStudent(responses: TeacherSpeakingResponse[]): StudentRow[] {
-    const map = new Map<string, StudentRow>()
-    for (const r of responses) {
-        if (!map.has(r.studentId)) {
-            map.set(r.studentId, {
-                studentId: r.studentId,
-                studentName: r.studentName,
-                studentEmail: r.studentEmail || '',
-                studentGroup: r.studentGroup || '',
-                sessionCount: 0,
-                lastActivity: r.createdAt,
-                hasAnalysis: false,
-                allSent: true,
-                unanalyzedCount: 0,
-            })
-        }
-        const entry = map.get(r.studentId)!
-        if (r.createdAt > entry.lastActivity) entry.lastActivity = r.createdAt
-        entry.sessionCount += 1
-        if (r.aiAnalysis) entry.hasAnalysis = true
-        if (!r.sentForAnalysis) entry.allSent = false
-        if (r.transcript && !r.aiAnalysis) entry.unanalyzedCount += 1
-    }
-    return [...map.values()].sort((a, b) => b.lastActivity.localeCompare(a.lastActivity))
 }
 
 function formatDate(value: string) {
@@ -54,9 +35,137 @@ function formatDate(value: string) {
     return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
+function getLatestTimestamp(...values: Array<string | null | undefined>) {
+    return values
+        .filter((value): value is string => Boolean(value))
+        .sort((left, right) => right.localeCompare(left))[0] || ''
+}
+
+function buildTestSummary(responses: TeacherSpeakingResponse[]) {
+    const studentMap = new Map<
+        string,
+        {
+            studentId: string
+            studentName: string
+            studentEmail: string
+            studentGroup: string
+            responses: TeacherSpeakingResponse[]
+        }
+    >()
+
+    for (const response of responses) {
+        if (!studentMap.has(response.studentId)) {
+            studentMap.set(response.studentId, {
+                studentId: response.studentId,
+                studentName: response.studentName,
+                studentEmail: response.studentEmail || '',
+                studentGroup: response.studentGroup || '',
+                responses: [],
+            })
+        }
+        studentMap.get(response.studentId)!.responses.push(response)
+    }
+
+    return new Map(
+        [...studentMap.entries()].map(([studentId, entry]) => {
+            const sorted = entry.responses.slice().sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+            const sessions: TeacherSpeakingResponse[][] = []
+
+            for (const response of sorted) {
+                const responseTime = new Date(response.createdAt).getTime()
+                const existingSession = sessions.find(session => {
+                    const lastResponse = session[session.length - 1]
+                    return (
+                        lastResponse.assignmentId === response.assignmentId &&
+                        Math.abs(new Date(lastResponse.createdAt).getTime() - responseTime) < SESSION_WINDOW_MS
+                    )
+                })
+
+                if (existingSession) {
+                    existingSession.push(response)
+                } else {
+                    sessions.push([response])
+                }
+            }
+
+            return [
+                studentId,
+                {
+                    studentId,
+                    studentName: entry.studentName,
+                    studentEmail: entry.studentEmail,
+                    studentGroup: entry.studentGroup,
+                    testCount: sessions.length,
+                    lastTestActivity: entry.responses.reduce((latest, response) => (
+                        response.createdAt > latest ? response.createdAt : latest
+                    ), ''),
+                    hasAnalysis: entry.responses.some(response => Boolean(response.aiAnalysis)),
+                    unanalyzedCount: entry.responses.filter(
+                        response => Boolean(response.transcript?.trim()) && !response.aiAnalysis,
+                    ).length,
+                },
+            ]
+        }),
+    )
+}
+
+function buildStudentRows(
+    students: StudentProfile[],
+    responses: TeacherSpeakingResponse[],
+    guidedSummaries: Record<string, GuidedSummary>,
+): StudentRow[] {
+    const studentLookup = new Map(students.map(student => [student.uid, student]))
+    const testSummary = buildTestSummary(responses)
+    const studentIds = new Set<string>([
+        ...students.map(student => student.uid),
+        ...testSummary.keys(),
+        ...Object.keys(guidedSummaries),
+    ])
+
+    return [...studentIds]
+        .map(studentId => {
+            const profile = studentLookup.get(studentId)
+            const test = testSummary.get(studentId)
+            const guided = guidedSummaries[studentId]
+
+            return {
+                studentId,
+                studentName: test?.studentName || profile?.displayName || profile?.name || 'Student',
+                studentEmail: test?.studentEmail || profile?.email || '',
+                studentGroup: test?.studentGroup || profile?.groupName || profile?.profileGroupName || '',
+                testCount: test?.testCount || 0,
+                guidedCount: guided?.guidedCount || 0,
+                lastActivity: getLatestTimestamp(test?.lastTestActivity, guided?.lastCompletedAt),
+                hasAnalysis: test?.hasAnalysis || false,
+                unanalyzedCount: test?.unanalyzedCount || 0,
+            }
+        })
+        .filter(student => student.testCount > 0 || student.guidedCount > 0)
+        .sort((left, right) => right.lastActivity.localeCompare(left.lastActivity))
+}
+
+async function fetchGuidedSummaries(teacherId: string, studentIds: string[]) {
+    if (!teacherId || studentIds.length === 0) return {}
+
+    const response = await fetch('/api/speaking/guided/teacher/summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teacherId, studentIds }),
+    })
+
+    const data = await response.json()
+    if (!response.ok) {
+        throw new Error(data.error || 'Failed to load guided speaking summaries.')
+    }
+
+    return (data.summaries || {}) as Record<string, GuidedSummary>
+}
+
 export default function TeacherSpeakingLogsPage() {
     const router = useRouter()
     const [responses, setResponses] = useState<TeacherSpeakingResponse[]>([])
+    const [studentsInClasses, setStudentsInClasses] = useState<StudentProfile[]>([])
+    const [guidedSummaries, setGuidedSummaries] = useState<Record<string, GuidedSummary>>({})
     const [loading, setLoading] = useState(true)
     const [search, setSearch] = useState('')
     const [error, setError] = useState<string | null>(null)
@@ -66,22 +175,36 @@ export default function TeacherSpeakingLogsPage() {
 
     useEffect(() => {
         const unsub = onAuthStateChanged(auth, user => {
-            if (user) setTeacherId(user.uid)
+            setTeacherId(user?.uid || null)
         })
         return () => unsub()
     }, [])
 
+    const reloadTeacherLogs = async (currentTeacherId: string) => {
+        const teacherProfile = await getUserProfile(currentTeacherId)
+        const classIds: string[] = (teacherProfile as any)?.classIds || []
+        const nextStudents = classIds.length > 0 ? await getStudentsByClassIds(classIds) : []
+        const studentIds = nextStudents.map(student => student.uid)
+        const [nextResponses, nextGuidedSummaries] = await Promise.all([
+            listSpeakingResponsesByStudentIds(studentIds, { onlySent: true }),
+            fetchGuidedSummaries(currentTeacherId, studentIds),
+        ])
+
+        setStudentsInClasses(nextStudents)
+        setResponses(nextResponses)
+        setGuidedSummaries(nextGuidedSummaries)
+    }
+
     useEffect(() => {
         const load = async () => {
-            if (!auth.currentUser) return
+            if (!teacherId) {
+                setLoading(false)
+                return
+            }
+
             try {
-                // Scope to teacher's own class students
-                const teacherProfile = await getUserProfile(auth.currentUser.uid)
-                const classIds: string[] = (teacherProfile as any)?.classIds || []
-                const students = classIds.length > 0 ? await getStudentsByClassIds(classIds) : []
-                const studentIds = students.map(s => s.uid)
-                const data = await listSpeakingResponsesByStudentIds(studentIds, { onlySent: true })
-                setResponses(data)
+                await reloadTeacherLogs(teacherId)
+                setError(null)
             } catch (err) {
                 console.error(err)
                 setError('Failed to load speaking logs.')
@@ -89,19 +212,23 @@ export default function TeacherSpeakingLogsPage() {
                 setLoading(false)
             }
         }
-        void load()
-    }, [])
 
-    const students = useMemo(() => groupByStudent(responses), [responses])
+        void load()
+    }, [teacherId])
+
+    const students = useMemo(
+        () => buildStudentRows(studentsInClasses, responses, guidedSummaries),
+        [guidedSummaries, responses, studentsInClasses],
+    )
     const totalUnanalyzed = useMemo(() => responses.filter(r => r.transcript && !r.aiAnalysis).length, [responses])
 
     const filtered = useMemo(() => {
         const q = search.trim().toLowerCase()
         if (!q) return students
-        return students.filter(s =>
-            s.studentName.toLowerCase().includes(q) ||
-            s.studentEmail.toLowerCase().includes(q) ||
-            s.studentGroup.toLowerCase().includes(q)
+        return students.filter(student =>
+            student.studentName.toLowerCase().includes(q) ||
+            student.studentEmail.toLowerCase().includes(q) ||
+            student.studentGroup.toLowerCase().includes(q),
         )
     }, [students, search])
 
@@ -123,7 +250,6 @@ export default function TeacherSpeakingLogsPage() {
 
             setBatchProgress({ processed: data.processedSoFar ?? 0, total: data.totalResponses ?? totalUnanalyzed })
 
-            // Poll for completion
             const jobId = data.batchJobId
             if (jobId) {
                 const poll = async () => {
@@ -132,14 +258,7 @@ export default function TeacherSpeakingLogsPage() {
                     setBatchProgress({ processed: pollData.processedSoFar ?? 0, total: pollData.totalResponses ?? totalUnanalyzed })
                     if (pollData.status === 'completed') {
                         setBatchStatus('done')
-                        // Reload responses scoped to teacher's students
-                        if (auth.currentUser) {
-                            const teacherProfile = await getUserProfile(auth.currentUser.uid)
-                            const classIds: string[] = (teacherProfile as any)?.classIds || []
-                            const students = classIds.length > 0 ? await getStudentsByClassIds(classIds) : []
-                            const fresh = await listSpeakingResponsesByStudentIds(students.map(s => s.uid))
-                            setResponses(fresh)
-                        }
+                        await reloadTeacherLogs(teacherId)
                     } else if (pollData.status === 'failed') {
                         setBatchStatus('error')
                     } else {
@@ -149,13 +268,7 @@ export default function TeacherSpeakingLogsPage() {
                 await poll()
             } else {
                 setBatchStatus('done')
-                if (auth.currentUser) {
-                    const teacherProfile = await getUserProfile(auth.currentUser.uid)
-                    const classIds: string[] = (teacherProfile as any)?.classIds || []
-                    const students = classIds.length > 0 ? await getStudentsByClassIds(classIds) : []
-                    const fresh = await listSpeakingResponsesByStudentIds(students.map(s => s.uid))
-                    setResponses(fresh)
-                }
+                await reloadTeacherLogs(teacherId)
             }
         } catch (err: any) {
             console.error(err)
@@ -230,6 +343,7 @@ export default function TeacherSpeakingLogsPage() {
                                     <th className="px-5 py-3 text-left hidden md:table-cell">Email</th>
                                     <th className="px-5 py-3 text-left hidden md:table-cell">Group</th>
                                     <th className="px-5 py-3 text-left hidden lg:table-cell">Last Activity</th>
+                                    <th className="px-5 py-3 text-left hidden md:table-cell">Sessions</th>
                                     <th className="px-5 py-3 text-center hidden md:table-cell">Status</th>
                                     <th className="px-5 py-3 text-right">Action</th>
                                 </tr>
@@ -252,8 +366,22 @@ export default function TeacherSpeakingLogsPage() {
                                         <td className="px-5 py-4 align-middle hidden lg:table-cell text-slate-500 text-xs whitespace-nowrap">
                                             {formatDate(student.lastActivity)}
                                         </td>
+                                        <td className="px-5 py-4 align-middle hidden md:table-cell">
+                                            <div className="flex flex-wrap gap-2">
+                                                <span className="inline-flex items-center rounded-full bg-sky-100 text-sky-700 px-2.5 py-1 text-xs font-semibold">
+                                                    {student.testCount} Test
+                                                </span>
+                                                <span className="inline-flex items-center rounded-full bg-teal-100 text-teal-700 px-2.5 py-1 text-xs font-semibold">
+                                                    {student.guidedCount} Guided
+                                                </span>
+                                            </div>
+                                        </td>
                                         <td className="px-5 py-4 align-middle text-center hidden md:table-cell">
-                                            {student.hasAnalysis ? (
+                                            {student.testCount === 0 && student.guidedCount > 0 ? (
+                                                <span className="inline-flex items-center rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold px-2.5 py-1">
+                                                    Completed
+                                                </span>
+                                            ) : student.hasAnalysis ? (
                                                 <span className="inline-flex items-center rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold px-2.5 py-1">
                                                     Analyzed
                                                 </span>
@@ -286,3 +414,4 @@ export default function TeacherSpeakingLogsPage() {
         </TeacherLayout>
     )
 }
+

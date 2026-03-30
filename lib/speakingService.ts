@@ -9,6 +9,11 @@ import {
     where,
 } from 'firebase/firestore'
 import { db } from './firebase'
+import {
+    createSpeakingTopic as createSharedSpeakingTopic,
+    deleteSpeakingTopicByTitle,
+    listTeacherSpeakingTopicTitles,
+} from './guidedSpeakingService'
 
 export interface SpeakingQuestionStep {
     id: string
@@ -398,29 +403,20 @@ export async function listAllSpeakingResponses(options?: { onlySent?: boolean })
 }
 
 export async function listSpeakingTopics(teacherId?: string): Promise<string[]> {
-    const docRef = teacherId ? getSpeakingTopicsDoc(teacherId) : SPEAKING_TOPICS_DOC_GLOBAL
-    const snapshot = await getDoc(docRef)
-    if (!snapshot.exists()) return []
-    const data = snapshot.data() as { topics?: unknown }
-    return Array.isArray(data.topics) ? data.topics.filter((t): t is string => typeof t === 'string') : []
+    if (!teacherId) return []
+    return listTeacherSpeakingTopicTitles(teacherId)
 }
 
 export async function addSpeakingTopic(topic: string, teacherId?: string): Promise<string[]> {
-    const existing = await listSpeakingTopics(teacherId)
-    const trimmed = topic.trim()
-    if (!trimmed || existing.includes(trimmed)) return existing
-    const updated = [...existing, trimmed]
-    const docRef = teacherId ? getSpeakingTopicsDoc(teacherId) : SPEAKING_TOPICS_DOC_GLOBAL
-    await setDoc(docRef, { topics: updated })
-    return updated
+    if (!teacherId) return []
+    await createSharedSpeakingTopic(topic, teacherId)
+    return listSpeakingTopics(teacherId)
 }
 
 export async function deleteSpeakingTopic(topic: string, teacherId?: string): Promise<string[]> {
-    const existing = await listSpeakingTopics(teacherId)
-    const updated = existing.filter(t => t !== topic)
-    const docRef = teacherId ? getSpeakingTopicsDoc(teacherId) : SPEAKING_TOPICS_DOC_GLOBAL
-    await setDoc(docRef, { topics: updated })
-    return updated
+    if (!teacherId) return []
+    const updatedTopics = await deleteSpeakingTopicByTitle(topic, teacherId)
+    return updatedTopics.map(item => item.title)
 }
 
 // ── Topics with deadlines ────────────────────────────────────────────────────

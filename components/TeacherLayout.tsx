@@ -129,6 +129,14 @@ const navGroups = [
                 )
             },
             {
+                href: '/teacher/speaking-v2', label: 'Guided Builder', permKey: 'canManageSpeaking', icon: (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
+                        <path d="M12 3l8 4.5v9L12 21 4 16.5v-9L12 3z" strokeLinecap="round" strokeLinejoin="round" />
+                        <path d="M8.5 11.5l2.25 2.25 4.75-4.75" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                )
+            },
+            {
                 href: '/teacher/speaking', label: 'Speaking Setup', permKey: 'canManageSpeaking', icon: (
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
                         <path d="M12 14a3 3 0 003-3V7a3 3 0 10-6 0v4a3 3 0 003 3z" strokeLinecap="round" strokeLinejoin="round" />
@@ -249,7 +257,7 @@ export default function TeacherLayout({ children, title = 'Teacher Panel' }: Tea
 
     const isActive = (href: string) => {
         if (href === '/teacher') return pathname === '/teacher'
-        return pathname.startsWith(href)
+        return pathname === href || pathname.startsWith(`${href}/`)
     }
 
     // Auto-expand the group that contains the active page

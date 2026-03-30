@@ -31,6 +31,7 @@ const GRAMMAR_ROUTES = [
 const SPEAKING_ROUTES = [
     '/speaking-practice',
     '/speaking-log',
+    '/student/speaking',
 ]
 
 /** Routes always accessible regardless of accessMode */
