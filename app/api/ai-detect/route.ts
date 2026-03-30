@@ -2,12 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
 import { adminDb } from '@/lib/firebase-admin'
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+export const dynamic = 'force-dynamic'
 
 const DETECTOR_PROMPT_ID = 'pmpt_69a3e4f87a80819085db0e4788a6fccc08d5c2d98eb0c9da'
 const DETECTOR_PROMPT_VERSION = '5'
 
 export async function POST(req: NextRequest) {
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
     try {
         const body = await req.json()
         const {

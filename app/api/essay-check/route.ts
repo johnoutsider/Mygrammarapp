@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
 import { adminDb } from '@/lib/firebase-admin'
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+export const dynamic = 'force-dynamic'
 
 // Default system prompt — used if teacher has not saved a custom one yet
 const DEFAULT_SYSTEM_PROMPT = `You are EVA (Essay Virtual Assistant), an expert IELTS writing coach helping students improve their Task 2 essays.
@@ -36,6 +36,7 @@ Rules:
 - Keep your total response under 400 words`
 
 export async function POST(req: NextRequest) {
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
     try {
         const { essay_content, previous_feedback } = await req.json()
 
