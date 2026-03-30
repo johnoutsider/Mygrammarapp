@@ -10,7 +10,7 @@
     },
     {
       "path": "/api/speaking/batch-analyze/collect",
-      "schedule": "*/15 * * * *"
+      "schedule": "0 2 * * *"
     }
   ]
 }
