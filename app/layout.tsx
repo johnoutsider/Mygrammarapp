@@ -1,8 +1,13 @@
 import type { Metadata } from 'next'
-import { Inter } from 'next/font/google'
+import { Inter, Irish_Grover } from 'next/font/google'
 import './globals.css'
 
 const inter = Inter({ subsets: ['latin'] })
+const irishGrover = Irish_Grover({
+    weight: '400',
+    subsets: ['latin'],
+    variable: '--font-irish-grover',
+})
 
 export const metadata: Metadata = {
     title: 'Peer feedback app',
@@ -18,7 +23,7 @@ export default function RootLayout({
 }) {
     return (
         <html lang="en" suppressHydrationWarning>
-            <body className={inter.className}>
+            <body className={`${inter.className} ${irishGrover.variable}`}>
                 <ThemeProvider
                     attribute="class"
                     defaultTheme="dark"
