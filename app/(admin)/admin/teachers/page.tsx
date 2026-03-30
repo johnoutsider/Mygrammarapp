@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import AdminLayout from '@/components/AdminLayout'
 import { getTeachers, suspendTeacher, unsuspendTeacher, removeTeacher } from '@/lib/adminService'
@@ -23,7 +23,7 @@ const STATUS_BADGE: Record<string, { label: string; color: string; bg: string }>
     rejected: { label: 'Rejected', color: '#6b7280', bg: '#f3f4f6' },
 }
 
-export default function TeachersPage() {
+function TeachersPageInner() {
     const searchParams = useSearchParams()
     const [user] = useAuthState(auth)
     const [adminProfile, setAdminProfile] = useState<UserProfile | null>(null)
@@ -266,5 +266,13 @@ export default function TeachersPage() {
                 </div>
             )}
         </AdminLayout>
+    )
+}
+
+export default function TeachersPage() {
+    return (
+        <Suspense fallback={<AdminLayout title="Teachers"><div className="p-10 text-center text-gray-400 text-sm">Loading...</div></AdminLayout>}>
+            <TeachersPageInner />
+        </Suspense>
     )
 }
