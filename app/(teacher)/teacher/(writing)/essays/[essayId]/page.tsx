@@ -3,17 +3,17 @@
 import { useEffect, useState } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
-import { auth, db } from '@/lib/firebase'
-import {
-    doc, getDoc, collection, query, where, getDocs,
-    addDoc, updateDoc, serverTimestamp,
-} from 'firebase/firestore'
+import { addDoc, collection, doc, getDoc, getDocs, query, serverTimestamp, updateDoc, where } from 'firebase/firestore'
 import TeacherLayout from '@/components/TeacherLayout'
+import AnnotatedEssay from '@/components/essay/AnnotatedEssay'
+import InlineNoteDraftList from '@/components/essay/InlineNoteDraftList'
+import { auth, db } from '@/lib/firebase'
+import { getEssayRevisionMs, hasInlineNoteOverlap, normalizeInlineNotes, type InlineNote } from '@/lib/essayInlineNotes'
 
-// ─── Rubric ───────────────────────────────────────────────────────────────────
 const ASPECTS = [
     {
-        id: 'content', title: 'Content',
+        id: 'content',
+        title: 'Content',
         levels: [
             { range: '27–30', desc: 'Essay clearly addresses topic · Ideas are developed thoroughly · Essay reflects substantive thought · No extraneous material' },
             { range: '22–26', desc: 'Essay mostly focused on topic · Expresses a few advanced ideas · Some details and reasons included, though thesis not fully developed' },
@@ -22,7 +22,8 @@ const ASPECTS = [
         ],
     },
     {
-        id: 'organization', title: 'Organization',
+        id: 'organization',
+        title: 'Organization',
         levels: [
             { range: '18–20', desc: 'Essay is well-organized · Paragraphs demonstrate logical sequencing · Sophisticated use of connectors contribute to cohesion' },
             { range: '14–17', desc: 'Somewhat choppy and loosely organized, but clear main ideas · Mostly logical sequencing · Frequent and appropriate use of connectors' },
@@ -31,7 +32,8 @@ const ASPECTS = [
         ],
     },
     {
-        id: 'vocabulary', title: 'Vocabulary',
+        id: 'vocabulary',
+        title: 'Vocabulary',
         levels: [
             { range: '18–20', desc: 'Effective and appropriate word/idiom choice and usage · Wide range of vocabulary; more frequent use of academic vocabulary · Word form mastery' },
             { range: '14–17', desc: 'Occasional errors of word/idiom choice and usage, but meaning not obscured · Adequate range; some use of low-frequency or specialized vocabulary' },
@@ -40,7 +42,8 @@ const ASPECTS = [
         ],
     },
     {
-        id: 'languageUse', title: 'Language Use',
+        id: 'languageUse',
+        title: 'Language Use',
         levels: [
             { range: '22–25', desc: 'Effective complex constructions · No, or only a few minor errors in use of relative clauses, agreement, tense, articles, pronouns, prepositions' },
             { range: '18–21', desc: 'Effective but simple constructions · Errors of agreement, tense, articles, pronouns, and prepositions, but meaning not obscured' },
@@ -49,7 +52,8 @@ const ASPECTS = [
         ],
     },
     {
-        id: 'mechanics', title: 'Mechanics',
+        id: 'mechanics',
+        title: 'Mechanics',
         levels: [
             { range: '5', desc: 'Demonstrates mastery of conventions · Few errors of spelling, punctuation, capitalization, paragraphing' },
             { range: '4', desc: 'Occasional errors of spelling, punctuation, capitalization, paragraphing but meaning not obscured' },
@@ -57,56 +61,66 @@ const ASPECTS = [
             { range: '2', desc: 'No mastery of conventions · Dominated by errors · Handwriting illegible · OR Not enough to evaluate' },
         ],
     },
-]
+] as const
 
 function getHighest(range: string | null): number {
     if (!range) return 0
-    const nums = range.split('–').map(n => parseInt(n.trim(), 10))
-    return Math.max(...nums)
+    const nums = range
+        .split(/[-–]/)
+        .map(n => parseInt(n.trim(), 10))
+        .filter(n => !Number.isNaN(n))
+    return nums.length > 0 ? Math.max(...nums) : 0
 }
 
-// ─── AspectCard ────────────────────────────────────────────────────────────────
 function AspectCard({
-    aspect, index, selected, onSelect, missing,
+    aspect,
+    index,
+    selected,
+    onSelect,
+    missing,
 }: {
-    aspect: typeof ASPECTS[0]
+    aspect: typeof ASPECTS[number]
     index: number
     selected: string | null
     onSelect: (range: string | null) => void
     missing?: boolean
 }) {
     return (
-        <div className={`rounded-xl mb-3 bg-white overflow-hidden border transition-all ${missing ? 'border-red-400 ring-1 ring-red-400' : 'border-slate-200'}`}>
-            <div className={`flex items-center gap-3 px-4 py-3 border-b ${missing ? 'border-red-100 bg-red-50' : 'border-slate-100'}`}>
-                <span className={`w-6 h-6 rounded-full text-white flex items-center justify-center text-xs font-bold shrink-0 ${selected ? 'bg-teal-600' : missing ? 'bg-red-500' : 'bg-slate-400'}`}>
+        <div className={`mb-3 overflow-hidden rounded-xl border bg-white transition-all ${missing ? 'border-red-400 ring-1 ring-red-400' : 'border-slate-200'}`}>
+            <div className={`flex items-center gap-3 border-b px-4 py-3 ${missing ? 'border-red-100 bg-red-50' : 'border-slate-100'}`}>
+                <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white ${selected ? 'bg-teal-600' : missing ? 'bg-red-500' : 'bg-slate-400'}`}>
                     {selected ? '✓' : index}
                 </span>
-                <span className="text-sm font-bold text-slate-900 flex-1">{aspect.title}</span>
+                <span className="flex-1 text-sm font-bold text-slate-900">{aspect.title}</span>
                 {missing && (
-                    <span className="text-xs font-semibold text-red-500 bg-red-100 px-2 py-0.5 rounded-full border border-red-200">Required</span>
+                    <span className="rounded-full border border-red-200 bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-500">
+                        Required
+                    </span>
                 )}
                 {selected && !missing && (
-                    <span className="text-xs font-semibold text-teal-600 bg-teal-50 px-2 py-0.5 rounded-full border border-teal-200">✓ Scored</span>
+                    <span className="rounded-full border border-teal-200 bg-teal-50 px-2 py-0.5 text-xs font-semibold text-teal-600">
+                        Scored
+                    </span>
                 )}
             </div>
-            <div className="p-3 space-y-1.5">
-                {aspect.levels.map((lv, i) => {
-                    const isSelected = selected === lv.range
+            <div className="space-y-1.5 p-3">
+                {aspect.levels.map(level => {
+                    const isSelected = selected === level.range
                     return (
                         <div
-                            key={i}
-                            className={`flex items-stretch rounded-lg overflow-hidden border transition-all ${isSelected ? 'border-teal-500' : 'border-transparent'} ${i % 2 === 0 ? 'bg-slate-50' : 'bg-white'}`}
+                            key={level.range}
+                            className={`flex items-stretch overflow-hidden rounded-lg border transition-all ${isSelected ? 'border-teal-500' : 'border-transparent'} bg-slate-50`}
                         >
                             <button
                                 type="button"
-                                onClick={() => onSelect(isSelected ? null : lv.range)}
-                                className={`px-3 py-2 text-xs font-bold whitespace-nowrap shrink-0 border-r transition-all ${isSelected
-                                    ? 'bg-teal-600 text-white border-teal-500'
-                                    : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-teal-50'}`}
+                                onClick={() => onSelect(isSelected ? null : level.range)}
+                                className={`shrink-0 border-r px-3 py-2 text-xs font-bold transition-all ${isSelected ? 'border-teal-500 bg-teal-600 text-white' : 'border-slate-200 bg-slate-100 text-slate-600 hover:bg-teal-50'}`}
                             >
-                                {lv.range}
+                                {level.range}
                             </button>
-                            <span className="px-3 py-2 text-xs text-slate-600 leading-relaxed">{lv.desc}</span>
+                            <span className="px-3 py-2 text-xs leading-relaxed text-slate-600">
+                                {level.desc}
+                            </span>
                         </div>
                     )
                 })}
@@ -115,34 +129,69 @@ function AspectCard({
     )
 }
 
-// ─── Essay Panel ──────────────────────────────────────────────────────────────
-function EssayPanel({ essay }: { essay: any }) {
+function EssayPanel({
+    essay,
+    inlineNotes,
+    essayRevisionMs,
+    onAddInlineNote,
+    onUpdateInlineNote,
+    onDeleteInlineNote,
+}: {
+    essay: any
+    inlineNotes: InlineNote[]
+    essayRevisionMs: number
+    onAddInlineNote: (note: InlineNote) => string | void
+    onUpdateInlineNote: (noteId: string, nextText: string) => void
+    onDeleteInlineNote: (noteId: string) => void
+}) {
     const wordCount = essay?.content?.trim().split(/\s+/).filter(Boolean).length ?? 0
+
     return (
-        <div className="p-4 space-y-4">
-            <div className="bg-white border border-slate-200 rounded-xl p-4">
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Topic</p>
-                <p className="text-base font-bold text-slate-900 mb-1">{essay?.topicName || 'Essay'}</p>
+        <div className="space-y-4 p-4">
+            <div className="rounded-xl border border-slate-200 bg-white p-4">
+                <p className="mb-1 text-xs font-bold uppercase tracking-widest text-slate-400">Topic</p>
+                <p className="mb-1 text-base font-bold text-slate-900">{essay?.topicName || 'Essay'}</p>
                 {essay?.authorName && (
-                    <p className="text-xs text-slate-400 mt-1">🎓 {essay.authorName} · {essay.submittedAt?.toDate?.().toLocaleDateString()}</p>
+                    <p className="mt-1 text-xs text-slate-400">
+                        {essay.authorName} · {essay.submittedAt?.toDate?.().toLocaleDateString?.() || ''}
+                    </p>
                 )}
             </div>
-            <div className="bg-white border border-slate-200 rounded-xl p-4">
+
+            <div className="rounded-xl border border-slate-200 bg-white p-4">
                 {essay?.title && (
-                    <p className="text-sm font-bold text-slate-900 mb-3 pb-3 border-b border-slate-100">{essay.title}</p>
+                    <p className="mb-3 border-b border-slate-100 pb-3 text-sm font-bold text-slate-900">
+                        {essay.title}
+                    </p>
                 )}
-                <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">{essay?.content}</p>
-                <div className="mt-4 pt-3 border-t border-slate-100">
-                    <span className="text-xs font-medium text-teal-600 bg-teal-50 border border-teal-100 px-3 py-1 rounded-full">
-                        📝 {wordCount} words
+                <div className="mb-4">
+                    <span className="rounded-full border border-teal-100 bg-teal-50 px-3 py-1 text-xs font-medium text-teal-600">
+                        {wordCount} words
                     </span>
                 </div>
+
+                <AnnotatedEssay
+                    content={essay?.content ?? ''}
+                    notes={inlineNotes}
+                    noteLabel="Teacher"
+                    tone="teacher"
+                    mode="author"
+                    authorRole="teacher"
+                    revisionMs={essayRevisionMs}
+                    onCreateNote={onAddInlineNote}
+                />
             </div>
+
+            <InlineNoteDraftList
+                notes={inlineNotes}
+                tone="teacher"
+                onUpdateNote={onUpdateInlineNote}
+                onDeleteNote={onDeleteInlineNote}
+            />
         </div>
     )
 }
 
-// ─── Main Page ────────────────────────────────────────────────────────────────
 export default function TeacherEssayReview() {
     const router = useRouter()
     const params = useParams()
@@ -157,84 +206,150 @@ export default function TeacherEssayReview() {
     const [submitAttempted, setSubmitAttempted] = useState(false)
     const [activeTab, setActiveTab] = useState<'essay' | 'rubric'>('essay')
     const [isMobile, setIsMobile] = useState(false)
+    const [inlineNotes, setInlineNotes] = useState<InlineNote[]>([])
+    const [essayRevisionMs, setEssayRevisionMs] = useState(0)
 
     const [scores, setScores] = useState<Record<string, string | null>>({
-        content: null, organization: null, vocabulary: null, languageUse: null, mechanics: null,
+        content: null,
+        organization: null,
+        vocabulary: null,
+        languageUse: null,
+        mechanics: null,
     })
     const [feedback, setFeedback] = useState('')
 
     useEffect(() => {
-        const check = () => setIsMobile(window.innerWidth < 768)
-        check()
-        window.addEventListener('resize', check)
-        return () => window.removeEventListener('resize', check)
+        const checkViewport = () => setIsMobile(window.innerWidth < 768)
+        checkViewport()
+        window.addEventListener('resize', checkViewport)
+        return () => window.removeEventListener('resize', checkViewport)
     }, [])
 
     useEffect(() => {
         const load = async () => {
-            if (!auth.currentUser) { router.push('/'); return }
+            if (!auth.currentUser) {
+                router.push('/')
+                return
+            }
+
             try {
                 const { getUserProfile } = await import('@/lib/auth')
                 const myProfile = await getUserProfile(auth.currentUser.uid)
-                if (myProfile?.role !== 'teacher') { router.push('/dashboard'); return }
+                if (myProfile?.role !== 'teacher') {
+                    router.push('/dashboard')
+                    return
+                }
 
-                // Fetch essay
                 const essayDoc = await getDoc(doc(db, 'essays', essayId))
-                if (!essayDoc.exists()) { router.push('/teacher/reviews'); return }
-                const essayData = { id: essayDoc.id, ...essayDoc.data() as any }
+                if (!essayDoc.exists()) {
+                    router.push('/teacher/reviews')
+                    return
+                }
 
-                // Fetch author name
+                const essayData = { id: essayDoc.id, ...essayDoc.data() } as any
                 let authorName = 'Student'
                 if (essayData.studentId) {
                     const authorDoc = await getDoc(doc(db, 'users', essayData.studentId))
                     if (authorDoc.exists()) {
-                        const a = authorDoc.data() as any
-                        authorName = a.displayName || a.name || 'Student'
+                        const author = authorDoc.data() as any
+                        authorName = author.displayName || author.name || 'Student'
                     }
                 }
-                setEssay({ ...essayData, authorName })
 
-                // Load existing teacher review if any
+                setEssay({ ...essayData, authorName })
+                setEssayRevisionMs(getEssayRevisionMs(essayData))
+
                 const existing = await getDocs(query(
                     collection(db, 'reviews'),
                     where('essayId', '==', essayId),
                     where('reviewerId', '==', auth.currentUser.uid),
-                    where('reviewerRole', '==', 'teacher'),
+                    where('reviewerRole', '==', 'teacher')
                 ))
+
                 if (!existing.empty) {
-                    const r = existing.docs[0]
-                    setExistingReviewId(r.id)
-                    const d = r.data() as any
-                    setFeedback(d.feedback || '')
+                    const reviewDoc = existing.docs[0]
+                    const reviewData = reviewDoc.data() as any
+                    setExistingReviewId(reviewDoc.id)
+                    setFeedback(reviewData.feedback || '')
+                    setInlineNotes(normalizeInlineNotes(reviewData.inlineNotes, essayData.content ?? ''))
+
                     const loadedScores: Record<string, string | null> = {}
-                    ASPECTS.forEach(a => { loadedScores[a.id] = d.scores?.[a.id] ?? null })
+                    ASPECTS.forEach(aspect => {
+                        loadedScores[aspect.id] = reviewData.scores?.[aspect.id] ?? null
+                    })
                     setScores(loadedScores)
                 }
-            } catch (err) {
-                console.error('Error loading essay:', err)
+            } catch (loadError) {
+                console.error('Error loading essay:', loadError)
             } finally {
                 setLoading(false)
             }
         }
+
         load()
     }, [essayId, router])
 
-    const allScored = ASPECTS.every(a => scores[a.id] !== null)
-    const totalScore = ASPECTS.reduce((sum, a) => sum + getHighest(scores[a.id]), 0)
-    const wordCount = feedback.trim() === '' ? 0 : feedback.trim().split(/\s+/).length
-    const feedbackValid = wordCount >= 10
+    const allScored = ASPECTS.every(aspect => scores[aspect.id] !== null)
+    const totalScore = ASPECTS.reduce((sum, aspect) => sum + getHighest(scores[aspect.id]), 0)
+    const feedbackWordCount = feedback.trim() === '' ? 0 : feedback.trim().split(/\s+/).length
+    const feedbackValid = feedbackWordCount >= 10
     const canSubmit = allScored && feedbackValid && !submitting
 
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault()
+    const addInlineNote = (note: InlineNote) => {
+        const essayContent = essay?.content ?? ''
+        if (note.start < 0 || note.end > essayContent.length || note.end <= note.start) {
+            return 'Select a valid passage before adding a note.'
+        }
+
+        if (hasInlineNoteOverlap(note, inlineNotes)) {
+            return 'That text overlaps an existing note.'
+        }
+
+        setInlineNotes(prev => [...prev, note].sort((a, b) => a.start - b.start))
+    }
+
+    const updateInlineNote = (noteId: string, nextText: string) => {
+        const trimmedText = nextText.trim().slice(0, 200)
+        if (!trimmedText) return
+
+        setInlineNotes(prev =>
+            prev.map(note => note.id === noteId ? { ...note, note: trimmedText } : note)
+        )
+    }
+
+    const deleteInlineNote = (noteId: string) => {
+        setInlineNotes(prev => prev.filter(note => note.id !== noteId))
+    }
+
+    const handleSubmit = async (event: React.FormEvent) => {
+        event.preventDefault()
         setError(null)
         setSubmitAttempted(true)
+
         if (!auth.currentUser || !essay) return
-        if (!allScored) { setError('Please select a score for all 5 rubric categories.'); return }
-        if (!feedbackValid) { setError('Please write at least 10 words of feedback.'); return }
+        if (!allScored) {
+            setError('Please select a score for all 5 rubric categories.')
+            return
+        }
+        if (!feedbackValid) {
+            setError('Please write at least 10 words of feedback.')
+            return
+        }
 
         setSubmitting(true)
         try {
+            const latestEssayDoc = await getDoc(doc(db, 'essays', essayId))
+            if (!latestEssayDoc.exists()) {
+                setError('This essay is no longer available.')
+                return
+            }
+
+            const latestRevisionMs = getEssayRevisionMs(latestEssayDoc.data() as any)
+            if (latestRevisionMs !== essayRevisionMs) {
+                setError('This essay changed while you were reviewing it. Refresh the page and review the latest version.')
+                return
+            }
+
             const payload = {
                 essayId,
                 reviewerId: auth.currentUser.uid,
@@ -244,166 +359,179 @@ export default function TeacherEssayReview() {
                 totalScore,
                 overallBand: totalScore,
                 feedback,
+                inlineNotes,
+                essayRevisionMs: latestRevisionMs,
                 updatedAt: serverTimestamp(),
             }
+
             if (existingReviewId) {
                 await updateDoc(doc(db, 'reviews', existingReviewId), payload)
             } else {
-                const ref = await addDoc(collection(db, 'reviews'), {
+                const reviewRef = await addDoc(collection(db, 'reviews'), {
                     ...payload,
                     completedAt: serverTimestamp(),
                 })
-                setExistingReviewId(ref.id)
+                setExistingReviewId(reviewRef.id)
             }
+
             setSuccess(existingReviewId ? 'Feedback updated!' : 'Feedback submitted!')
             setTimeout(() => setSuccess(null), 3000)
-        } catch (err) {
-            console.error('Save error:', err)
+        } catch (submitError) {
+            console.error('Teacher feedback save error:', submitError)
             setError('Failed to save feedback. Please try again.')
         } finally {
             setSubmitting(false)
         }
     }
 
-    if (loading) return (
-        <div className="min-h-screen flex items-center justify-center bg-slate-50">
-            <div className="animate-spin rounded-full h-11 w-11 border-b-2 border-teal-500" />
-        </div>
-    )
+    if (loading) {
+        return (
+            <div className="flex min-h-screen items-center justify-center bg-slate-50">
+                <div className="h-11 w-11 animate-spin rounded-full border-b-2 border-teal-500" />
+            </div>
+        )
+    }
+
     if (!essay) return null
 
-    // ── Rubric panel ──────────────────────────────────────────────────────────
     const rubricPanel = (
-        <div className="p-4 bg-slate-50 space-y-0">
+        <div className="space-y-0 bg-slate-50 p-4">
             <div className="mb-4 flex items-center justify-between">
                 <div>
-                    <p className="text-base font-bold text-slate-900 mb-0.5">Writing Development Rubric</p>
-                    <p className="text-xs text-slate-500">Teacher assessment — click a score range to select it.</p>
+                    <p className="mb-0.5 text-base font-bold text-slate-900">Writing Development Rubric</p>
+                    <p className="text-xs text-slate-500">Teacher assessment. Click a score range to select it.</p>
                 </div>
-                <div className={`text-sm font-bold px-3 py-1 rounded-full border ${allScored
-                    ? 'bg-green-50 text-green-700 border-green-200'
-                    : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
-                    {ASPECTS.filter(a => scores[a.id]).length}/{ASPECTS.length} scored
+                <div className={`rounded-full border px-3 py-1 text-sm font-bold ${allScored ? 'border-green-200 bg-green-50 text-green-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
+                    {ASPECTS.filter(aspect => scores[aspect.id]).length}/{ASPECTS.length} scored
                 </div>
             </div>
 
             {error && (
-                <div className="mb-3 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-600">{error}</div>
+                <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+                    {error}
+                </div>
             )}
             {success && (
-                <div className="mb-3 px-4 py-3 rounded-lg bg-green-50 border border-green-200 text-sm text-green-700">
-                    ✅ {success}
+                <div className="mb-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+                    {success}
                 </div>
             )}
 
             <form onSubmit={handleSubmit}>
-                {ASPECTS.map((aspect, i) => (
+                {ASPECTS.map((aspect, index) => (
                     <AspectCard
                         key={aspect.id}
                         aspect={aspect}
-                        index={i + 1}
+                        index={index + 1}
                         selected={scores[aspect.id]}
-                        onSelect={(range) => setScores(prev => ({ ...prev, [aspect.id]: range }))}
+                        onSelect={range => setScores(prev => ({ ...prev, [aspect.id]: range }))}
                         missing={submitAttempted && !scores[aspect.id]}
                     />
                 ))}
 
-                {/* Total score */}
-                <div className="border border-slate-200 rounded-xl bg-white p-4 mb-3 flex items-center justify-between">
+                <div className="mb-3 flex items-center justify-between rounded-xl border border-slate-200 bg-white p-4">
                     <div>
-                        <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Total Score</p>
+                        <p className="mb-1 text-xs font-bold uppercase tracking-widest text-slate-400">Total Score</p>
                         <p className={`text-3xl font-extrabold leading-none ${allScored ? 'text-teal-600' : 'text-slate-300'}`}>
                             {allScored ? totalScore : '—'}
                         </p>
                     </div>
-                    <div className="flex gap-2 flex-wrap justify-end max-w-[60%]">
-                        {ASPECTS.map(a => (
-                            <div key={a.id} className="text-center">
-                                <div className="text-xs text-slate-400 mb-1">{a.title}</div>
-                                <div className={`px-2 py-0.5 rounded text-xs font-bold ${scores[a.id] ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                                    {scores[a.id] ? getHighest(scores[a.id]) : '–'}
+                    <div className="flex max-w-[60%] flex-wrap justify-end gap-2">
+                        {ASPECTS.map(aspect => (
+                            <div key={aspect.id} className="text-center">
+                                <div className="mb-1 text-xs text-slate-400">{aspect.title}</div>
+                                <div className={`rounded px-2 py-0.5 text-xs font-bold ${scores[aspect.id] ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                                    {scores[aspect.id] ? getHighest(scores[aspect.id]) : '–'}
                                 </div>
                             </div>
                         ))}
                     </div>
                 </div>
 
-                {/* Written feedback */}
-                <div className="border border-slate-200 rounded-xl bg-white overflow-hidden mb-3">
-                    <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-100">
-                        <span className="w-6 h-6 rounded-full bg-teal-600 text-white flex items-center justify-center text-xs font-bold shrink-0">6</span>
+                <div className="mb-3 overflow-hidden rounded-xl border border-slate-200 bg-white">
+                    <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-3">
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-teal-600 text-xs font-bold text-white">6</span>
                         <span className="text-sm font-bold text-slate-900">Teacher Feedback</span>
-                        <span className="ml-auto text-xs text-slate-400 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded-full">Visible to student</span>
+                        <span className="ml-auto rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-400">Visible to student</span>
                     </div>
                     <div className="p-4">
                         <textarea
                             value={feedback}
-                            onChange={e => { setFeedback(e.target.value); setError(null) }}
-                            placeholder="Write personalised feedback for this student (at least 10 words). Be specific about what they did well and what to improve."
+                            onChange={event => {
+                                setFeedback(event.target.value)
+                                setError(null)
+                            }}
+                            placeholder="Write personalised feedback for this student (at least 10 words)."
                             rows={6}
-                            className="w-full bg-slate-50 border border-slate-200 text-slate-900 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-teal-500 transition-colors resize-vertical placeholder:text-slate-400"
+                            className="w-full resize-y rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-teal-500"
                         />
-                        <p className={`text-xs mt-1.5 ${feedbackValid ? 'text-slate-400' : 'text-red-500'}`}>
-                            {wordCount} word{wordCount !== 1 ? 's' : ''}
-                            {!feedbackValid && wordCount > 0 && ` · ${10 - wordCount} more needed`}
+                        <p className={`mt-1.5 text-xs ${feedbackValid ? 'text-slate-400' : 'text-red-500'}`}>
+                            {feedbackWordCount} word{feedbackWordCount === 1 ? '' : 's'}
+                            {!feedbackValid && feedbackWordCount > 0 && ` · ${10 - feedbackWordCount} more needed`}
                         </p>
                     </div>
                 </div>
 
-                {/* Submit */}
                 <button
                     type="submit"
                     disabled={!canSubmit}
-                    className={`w-full py-3.5 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 ${canSubmit
-                        ? 'bg-teal-600 hover:bg-teal-700 text-white shadow-sm'
-                        : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`}
+                    className={`flex w-full items-center justify-center gap-2 rounded-xl py-3.5 text-sm font-bold transition-all ${canSubmit ? 'bg-teal-600 text-white hover:bg-teal-700' : 'cursor-not-allowed bg-slate-100 text-slate-400'}`}
                 >
                     {submitting ? (
-                        <><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />Saving…</>
-                    ) : existingReviewId ? '✏️ Update Feedback' : '💾 Submit Feedback'}
+                        <>
+                            <div className="h-4 w-4 animate-spin rounded-full border-b-2 border-white" />
+                            Saving...
+                        </>
+                    ) : existingReviewId ? 'Update Feedback' : 'Submit Feedback'}
                 </button>
             </form>
         </div>
     )
 
+    const essayPanel = (
+        <EssayPanel
+            essay={essay}
+            inlineNotes={inlineNotes}
+            essayRevisionMs={essayRevisionMs}
+            onAddInlineNote={addInlineNote}
+            onUpdateInlineNote={updateInlineNote}
+            onDeleteInlineNote={deleteInlineNote}
+        />
+    )
+
     return (
         <TeacherLayout title="Essay Feedback">
-            {/* Back link */}
-            <div className="px-4 pt-4 pb-0">
+            <div className="px-4 pb-0 pt-4">
                 <Link
                     href="/teacher/reviews"
-                    className="text-slate-400 hover:text-slate-700 transition-colors text-sm flex items-center gap-1.5 inline-flex"
+                    className="inline-flex items-center gap-1.5 text-sm text-slate-400 transition-colors hover:text-slate-700"
                 >
                     ← Back to Reviews
                 </Link>
             </div>
 
-            {/* Mobile tabs */}
             {isMobile && (
-                <div className="flex bg-white border-b border-slate-200 mt-3">
+                <div className="mt-3 flex border-b border-slate-200 bg-white">
                     {(['essay', 'rubric'] as const).map(tab => (
                         <button
                             key={tab}
                             onClick={() => setActiveTab(tab)}
-                            className={`flex-1 py-3 text-sm font-semibold capitalize transition-colors border-b-2 ${activeTab === tab
-                                ? 'text-teal-600 border-teal-600'
-                                : 'text-slate-500 border-transparent'}`}
+                            className={`flex-1 border-b-2 py-3 text-sm font-semibold capitalize transition-colors ${activeTab === tab ? 'border-teal-600 text-teal-600' : 'border-transparent text-slate-500'}`}
                         >
-                            {tab === 'essay' ? '📄 Essay' : '📋 Rubric'}
+                            {tab}
                         </button>
                     ))}
                 </div>
             )}
 
-            {/* Body */}
             {isMobile ? (
                 <div className="flex-1 overflow-auto">
-                    {activeTab === 'essay' ? <EssayPanel essay={essay} /> : rubricPanel}
+                    {activeTab === 'essay' ? essayPanel : rubricPanel}
                 </div>
             ) : (
-                <div className="grid grid-cols-2 h-full overflow-hidden">
+                <div className="grid h-full grid-cols-2 overflow-hidden">
                     <div className="overflow-auto border-r border-slate-200">
-                        <EssayPanel essay={essay} />
+                        {essayPanel}
                     </div>
                     <div className="overflow-auto">
                         {rubricPanel}

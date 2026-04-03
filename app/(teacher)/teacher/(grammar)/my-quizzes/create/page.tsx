@@ -116,11 +116,17 @@ export default function CreateQuizPage() {
     const handleCreate = async () => {
         if (!title.trim()) { setError('Please enter a title.'); return }
         if (method === 'csv' && !importFile) { setError('Please upload a file.'); return }
+
+        // Use auth.currentUser as source of truth — uid state may not be set yet
+        const { auth } = await import('@/lib/firebase')
+        const effectiveUid = uid || auth.currentUser?.uid || ''
+        if (!effectiveUid) { setError('Not logged in. Please refresh and try again.'); return }
+
         setError('')
         setCreating(true)
 
         try {
-            const quizId = await createTeacherQuiz(uid, title.trim(), description.trim(), privacy, coverColor)
+            const quizId = await createTeacherQuiz(effectiveUid, title.trim(), description.trim(), privacy, coverColor)
 
             if (method === 'csv' && importFile) {
                 const isExcel = importFile.name.endsWith('.xlsx') || importFile.name.endsWith('.xls')
@@ -141,9 +147,10 @@ export default function CreateQuizPage() {
             }
 
             router.push(`/teacher/my-quizzes/${quizId}/edit`)
-        } catch (err) {
-            console.error(err)
-            setError('Something went wrong. Please try again.')
+        } catch (err: any) {
+            console.error('createTeacherQuiz error:', err)
+            const msg = err?.message || err?.code || JSON.stringify(err)
+            setError(`Error: ${msg}`)
             setCreating(false)
         }
     }

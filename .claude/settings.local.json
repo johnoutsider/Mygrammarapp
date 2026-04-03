@@ -18,7 +18,9 @@
       "Bash(find \"D:\\\\Coding\\\\Antigravity folder\\\\Mygrammarapp/app/\\(admin\\)/admin\" -name \"page.tsx\" -type f)",
       "Bash(npm run:*)",
       "Bash(firebase deploy:*)",
-      "Bash(firebase projects:list)"
+      "Bash(firebase projects:list)",
+      "mcp__claude_ai_Figma__use_figma",
+      "mcp__claude_ai_Figma__get_screenshot"
     ]
   }
 }

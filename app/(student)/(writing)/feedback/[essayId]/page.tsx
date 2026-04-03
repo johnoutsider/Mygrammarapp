@@ -6,8 +6,10 @@ import Link from 'next/link'
 import { auth, db } from '@/lib/firebase'
 import { doc, getDoc, collection, query, where, getDocs, updateDoc } from 'firebase/firestore'
 import StudentLayout from '@/components/StudentLayout'
+import InlineNoteLayerViewer from '@/components/essay/InlineNoteLayerViewer'
 import ScoreChart from '@/components/teacher/essay/ScoreChart'
 import { calculateFinalScores, getScoreColor, getScoreLabel, isNewRubric, getScore100, getScore100Label, getScore100Color } from '@/lib/score-calculator'
+import { buildReviewAnnotationLayers, dedupeLatestReviews } from '@/lib/essayInlineNotes'
 
 export default function Feedback() {
     const router = useRouter()
@@ -91,17 +93,11 @@ export default function Feedback() {
                 )
                 const reviewsSnapshot = await getDocs(reviewsQuery)
 
-                // Deduplicate reviews by reviewerId so one user can't skew the score with double submissions
-                const uniqueReviewsMap = new Map()
-                reviewsSnapshot.docs.forEach(doc => {
-                    const data = { id: doc.id, ...doc.data() } as any
-                    // Keep the latest review if duplicates exist
-                    if (!uniqueReviewsMap.has(data.reviewerId) ||
-                        data.completedAt?.toMillis() > uniqueReviewsMap.get(data.reviewerId).completedAt?.toMillis()) {
-                        uniqueReviewsMap.set(data.reviewerId, data)
-                    }
-                })
-                const reviewsData = Array.from(uniqueReviewsMap.values())
+                const reviewDocs = reviewsSnapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data(),
+                })) as any[]
+                const reviewsData = dedupeLatestReviews(reviewDocs)
 
                 // Seed student response state from existing Firestore data
                 const initialResponses: typeof studentResponses = {}
@@ -270,7 +266,34 @@ export default function Feedback() {
         { key: 'languageUse', label: 'Language Use', max: 25 },
         { key: 'mechanics', label: 'Mechanics', max: 5 },
     ]
-    const peerReviews = reviews.filter(r => r.reviewerRole !== 'ai' && r.reviewerRole !== 'teacher')
+    const humanReviews = reviews.filter(r => r.reviewerRole !== 'ai')
+    const annotationLayers = essay
+        ? buildReviewAnnotationLayers(humanReviews, essay.content ?? '', {
+            includeTeachers: true,
+            includePeers: true,
+        })
+        : []
+    const peerLayerOrderById = Object.fromEntries(
+        annotationLayers
+            .filter(layer => layer.tone === 'peer')
+            .map((layer, index) => [layer.id, index])
+    ) as Record<string, number>
+    const orderedReviews = [...reviews].sort((a, b) => {
+        const rankA = a.reviewerRole === 'ai' ? 0 : a.reviewerRole === 'teacher' ? 1 : 2
+        const rankB = b.reviewerRole === 'ai' ? 0 : b.reviewerRole === 'teacher' ? 1 : 2
+        if (rankA !== rankB) return rankA - rankB
+        if (rankA === 2) {
+            return (peerLayerOrderById[a.id] ?? 999) - (peerLayerOrderById[b.id] ?? 999)
+        }
+        return 0
+    })
+    const orderedHumanReviews = orderedReviews.filter(r => r.reviewerRole !== 'ai')
+    const peerReviews = orderedHumanReviews.filter(r => r.reviewerRole !== 'teacher')
+    const peerLabelByReviewId = Object.fromEntries(
+        annotationLayers
+            .filter(layer => layer.tone === 'peer')
+            .map(layer => [layer.id, layer.label])
+    ) as Record<string, string>
     const avgScore100 = (usingNewRubric && peerReviews.length > 0)
         ? Math.round(peerReviews.reduce((sum, r) => sum + getScore100(r.scores ?? {}), 0) / peerReviews.length)
         : 0
@@ -349,7 +372,9 @@ export default function Feedback() {
                                             <th className="py-3 px-4 text-slate-600 ">Aspect</th>
                                             <th className="py-3 px-4 text-center text-slate-500  text-xs">Max</th>
                                             {peerReviews.map((r, i) => (
-                                                <th key={i} className="py-3 px-4 text-center text-slate-600 ">Reviewer {i + 1}</th>
+                                                <th key={i} className="py-3 px-4 text-center text-slate-600 ">
+                                                    {peerLabelByReviewId[r.id] ?? `Reviewer ${i + 1}`}
+                                                </th>
                                             ))}
                                             {peerReviews.length > 1 && <th className="py-3 px-4 text-center text-slate-600  font-bold">Avg</th>}
                                         </tr>
@@ -397,9 +422,9 @@ export default function Feedback() {
                                     <thead>
                                         <tr className="border-b border-slate-200  shadow-sm">
                                             <th className="py-3 px-4 text-slate-600 ">Criterion</th>
-                                            {reviews.map((review, idx) => (
+                                            {orderedReviews.map((review, idx) => (
                                                 <th key={idx} className="py-3 px-4 text-center text-slate-600 ">
-                                                    {review.reviewerRole === 'ai' ? '🤖 AI' : review.reviewerRole === 'teacher' ? 'Teacher' : `Reviewer ${idx + 1}`}
+                                                    {review.reviewerRole === 'ai' ? '🤖 AI' : review.reviewerRole === 'teacher' ? 'Teacher' : (peerLabelByReviewId[review.id] ?? `Reviewer ${idx + 1}`)}
                                                 </th>
                                             ))}
                                             {finalScores && <th className="py-3 px-4 text-center text-slate-600  font-bold">Final</th>}
@@ -409,7 +434,7 @@ export default function Feedback() {
                                         {criteria.map(({ key, label }) => (
                                             <tr key={key} className="border-b border-slate-200  shadow-sm">
                                                 <td className="py-3 px-4 text-slate-900 ">{label}</td>
-                                                {reviews.map((review, idx) => (
+                                                {orderedReviews.map((review, idx) => (
                                                     <td key={idx} className="py-3 px-4 text-center text-slate-900  font-bold">
                                                         {review.scores?.[key] || 'N/A'}
                                                     </td>
@@ -431,10 +456,20 @@ export default function Feedback() {
 
 
                 {/* Peer Reviews — gated for essay owner until they complete 2 reviews */}
-                {reviews.length > 0 && (canViewScores || isTeacher || essay.studentId !== auth.currentUser?.uid) && (
+                {(canViewScores || isTeacher || essay.studentId !== auth.currentUser?.uid) && (
+                    <InlineNoteLayerViewer
+                        content={essay.content ?? ''}
+                        layers={annotationLayers}
+                        title="Inline Notes on the Essay"
+                        description="Switch between teacher and reviewer layers. Underlined passages open the saved note in place."
+                        emptyMessage="No inline notes have been added to this essay yet."
+                    />
+                )}
+
+                {orderedReviews.length > 0 && (canViewScores || isTeacher || essay.studentId !== auth.currentUser?.uid) && (
                     <div className="space-y-6">
                         <h2 className="text-2xl font-semibold text-slate-900 ">Peer Reviews</h2>
-                        {reviews.map((review, idx) => {
+                        {orderedReviews.map((review, idx) => {
                             const isAI = review.reviewerRole === 'ai'
                             const isTeacherReview = review.reviewerRole === 'teacher'
 
@@ -552,7 +587,7 @@ export default function Feedback() {
                                 >
                                     <div className="flex items-center justify-between mb-4">
                                         <h3 className={`text-xl font-semibold ${isTeacherReview ? 'text-purple-400' : 'text-slate-900 '}`}>
-                                            {isTeacherReview ? '🎓 Teacher Feedback' : `Reviewer ${idx + 1}`}
+                                            {isTeacherReview ? '🎓 Teacher Feedback' : (peerLabelByReviewId[review.id] ?? `Reviewer ${idx + 1}`)}
                                         </h3>
                                         {isTeacher && !isTeacherReview && review.reviewerName && (
                                             <span className="text-slate-500  text-sm italic bg-slate-100  px-3 py-1 rounded-full border border-slate-200 ">

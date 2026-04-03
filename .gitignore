@@ -17,3 +17,4 @@ dev-3012.log
 *.txt
 build.log
 build_output.log
+.vercel
